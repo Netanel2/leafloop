@@ -286,3 +286,231 @@ h1,h2,h3{font-family:var(--font-d);margin:0;line-height:1.15}
 
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-delay:0ms!important;transition-duration:.01ms!important}}
 @media (min-width:520px){#app{box-shadow:0 0 0 1px rgba(255,255,255,.08)}}
+
+
+/* ===== Premium visual polish — 2026-09-27 =====
+   Scoped styling only: no HTML/JS behavior changes.
+*/
+:root{
+  --jungle:#173D30;
+  --jungle-2:#235343;
+  --leaf:#2F7D5C;
+  --lime:#DCEB9D;
+  --mango:#E9BE67;
+  --hibiscus:#C96678;
+  --papaya:#D98362;
+  --lagoon:#5FA49C;
+  --orchid:#8E79A9;
+  --bg:#F6F3EA;
+  --card:#FFFDF8;
+  --ink:#173D30;
+  --muted:#6E7D75;
+  --line:#E2DED3;
+  --r-lg:26px;
+  --r-md:18px;
+  --tab-h:74px;
+}
+
+html,body{background:#173D30}
+#app{
+  max-width:460px;
+  background:var(--bg);
+}
+@media (min-width:520px){
+  #app{box-shadow:0 0 50px rgba(0,0,0,.16)}
+}
+
+/* header: calmer, more premium */
+.hero{
+  background:linear-gradient(145deg,#173D30 0%,#0F2F27 100%);
+  padding:24px 20px 84px;
+  border-radius:0 0 30px 30px;
+}
+.hero::after{background:#DCEB9D;opacity:.10}
+.hero::before{background:#C96678;opacity:.08}
+.hero h1{
+  font-size:29px;
+  letter-spacing:-.35px;
+}
+.hero .icon-btn{
+  background:rgba(255,255,255,.10);
+  border:1px solid rgba(255,255,255,.12);
+}
+.loc{
+  background:rgba(255,255,255,.10);
+  color:#fff;
+  border:1px solid rgba(255,255,255,.14);
+  padding:7px 11px;
+  font-weight:600;
+}
+
+/* swipe deck: one clear focal card, subtle depth */
+.deck-wrap{
+  margin-top:-56px;
+  padding:0 18px;
+}
+.deck-meta{
+  margin:0 2px 12px;
+  font-size:13px;
+  font-weight:600;
+}
+.deck{
+  height:clamp(430px,calc(100dvh - 370px),540px);
+}
+.card{
+  border-radius:26px;
+  border:1px solid rgba(23,61,48,.07);
+  box-shadow:0 18px 42px -24px rgba(23,61,48,.42);
+  transform:translateY(calc(var(--i) * 7px)) scale(calc(1 - var(--i) * .022));
+}
+.badge{
+  top:13px;
+  inset-inline-start:13px;
+  padding:6px 11px;
+  font-size:12px;
+  letter-spacing:.1px;
+}
+.b-perfect{background:#173D30}
+.b-wishlist{background:#173D30}
+.b-good{background:rgba(255,253,248,.92);color:#173D30}
+.b-nearby{background:rgba(255,253,248,.90);color:#173D30}
+.card-info{
+  padding:14px 16px 16px;
+}
+.card-info h2{
+  font-size:25px;
+  letter-spacing:-.25px;
+}
+.sci{
+  margin-top:2px;
+  margin-bottom:9px;
+  color:#75837C;
+}
+.chip{
+  background:#F0EEE6;
+  color:#284C40;
+  border:1px solid rgba(23,61,48,.05);
+}
+.chip.want{
+  background:#F5EEDB;
+  color:#6D5622;
+}
+.chip.have{
+  background:#E7EFC5;
+  color:#244837;
+}
+.chip.open{
+  background:#EEE9F1;
+  color:#5C4D67;
+}
+
+/* actions: no toy-like hard shadows or overlap */
+.actions{
+  gap:14px;
+  margin:18px 0 12px;
+}
+.act{
+  width:54px;
+  height:54px;
+  background:var(--card);
+  border:1px solid rgba(23,61,48,.07);
+  box-shadow:0 8px 22px rgba(23,61,48,.11);
+}
+.act:active{
+  transform:scale(.95);
+  box-shadow:0 4px 12px rgba(23,61,48,.10);
+}
+.act.pass{color:#7A8A83}
+.act.save{
+  width:50px;
+  height:50px;
+  color:#315B4C;
+}
+.act.like{
+  width:66px;
+  height:66px;
+  background:#173D30;
+  color:#DCEB9D;
+  box-shadow:0 10px 26px rgba(23,61,48,.22);
+}
+.act.super{color:#B29049}
+
+/* breathing room below the deck */
+.section-t{
+  margin:30px 18px 12px;
+  font-size:20px;
+  letter-spacing:-.15px;
+}
+.strip{
+  gap:10px;
+  padding:2px 18px 10px;
+}
+.mini{
+  width:136px;
+  border-radius:18px;
+  border:1px solid rgba(23,61,48,.06);
+  box-shadow:0 7px 18px rgba(23,61,48,.06);
+}
+.mini .mv{height:116px}
+
+/* restrained bottom navigation */
+#tabbar{
+  height:calc(var(--tab-h) + env(safe-area-inset-bottom));
+  background:rgba(255,253,248,.96);
+  border-top:1px solid rgba(23,61,48,.08);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+}
+#tabbar a{
+  color:#829087;
+  font-size:11px;
+}
+#tabbar a.on{
+  color:#173D30;
+}
+#tabbar a.on .ic{
+  color:#173D30;
+}
+#tabbar .add{
+  width:54px;
+  height:54px;
+  border-radius:50%;
+  background:#173D30;
+  color:#DCEB9D;
+  transform:translateY(-8px);
+  box-shadow:0 8px 20px rgba(23,61,48,.22);
+}
+#tabbar .add .ic{
+  color:#DCEB9D!important;
+  transform:none;
+}
+
+/* consistent, quieter surfaces across the app */
+.list,.req,.owner,.stat,.guess,.toggle,.pick-item,.notif{
+  box-shadow:0 6px 18px rgba(23,61,48,.05);
+}
+.icon-btn{
+  border-radius:50%;
+}
+.btn{
+  box-shadow:none;
+}
+.btn.hot{
+  background:#173D30;
+}
+.btn.sun{
+  background:#E9BE67;
+}
+.btn.primary{
+  background:#173D30;
+}
+
+@media (max-width:380px){
+  .hero{padding-inline:16px}
+  .deck-wrap{padding-inline:14px}
+  .deck{height:clamp(400px,calc(100dvh - 350px),500px)}
+  .actions{gap:11px}
+  .act{width:50px;height:50px}
+  .act.like{width:62px;height:62px}
+  .act.save{width:46px;height:46px}
+}
