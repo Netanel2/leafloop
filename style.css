@@ -347,7 +347,7 @@ html,body{background:#173D30}
 /* swipe deck: one clear focal card, subtle depth */
 .deck-wrap{
   margin-top:-56px;
-  padding:0 18px;
+  padding:0 18px 30px;
 }
 .deck-meta{
   margin:0 2px 12px;
