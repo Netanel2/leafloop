@@ -1,21 +1,31 @@
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#173d30">
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css">
-  <title>LeafMatch – החלפת צמחים</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LeafMatch · מחליפים צמחים בשכונה</title>
+<meta name="description" content="אפליקציה להחלפת צמחים, ייחורים וזרעים עם אנשים באזור שלך.">
+<meta name="theme-color" content="#073B2A">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&family=Rubik:wght@500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="app"></div>
-  <div id="toast" class="toast"></div>
-  <div id="sheet-wrap" class="sheet-wrap"><div class="sheet-bg" data-a="closeSheet"></div><div id="sheet" class="sheet" tabindex="-1"></div></div>
-  <div id="overlay" class="overlay"></div>
-  <script src="/data.js"></script>
-  <script src="/art.js"></script>
-  <script src="/app.js"></script>
+<div id="app">
+  <main id="view"></main>
+  <nav id="tabbar" aria-label="ניווט ראשי"></nav>
+</div>
+<div id="overlay" aria-live="polite"></div>
+<div id="sheet-wrap"><div id="sheet-bg" data-a="closeSheet"></div><div id="sheet" role="dialog" aria-modal="true" tabindex="-1"></div></div>
+<div id="toast" role="status"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+<script src="data.js"></script>
+<script src="art.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
