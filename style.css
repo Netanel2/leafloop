@@ -347,7 +347,7 @@ html,body{background:#173D30}
 /* swipe deck: one clear focal card, subtle depth */
 .deck-wrap{
   margin-top:-56px;
-  padding:0 18px 30px;
+  padding:0 18px;
 }
 .deck-meta{
   margin:0 2px 12px;
@@ -407,7 +407,7 @@ html,body{background:#173D30}
 /* actions: no toy-like hard shadows or overlap */
 .actions{
   gap:14px;
-  margin:18px 0 20px;
+  margin:32px 0 8px;
 }
 .act{
   width:54px;
@@ -437,7 +437,7 @@ html,body{background:#173D30}
 
 /* breathing room below the deck */
 .section-t{
-  margin:38px 18px 14px;
+  margin:24px 18px 12px;
   font-size:20px;
   letter-spacing:-.15px;
 }
