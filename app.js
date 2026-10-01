@@ -49,6 +49,8 @@ const ICONS = {
   mic: 'M9 5a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0zM5 10a7 7 0 0 0 14 0M8 21h8M12 17v4',
   micOff: 'M3 3l18 18M9 5a3 3 0 0 1 6 0v5c0 .3 0 .6-.1.9M15 15a3 3 0 0 1-6-1.5V11M5 10a7 7 0 0 0 10.6 6M19 10a7 7 0 0 1-.7 3M8 21h8M12 17v4',
   play: 'M7 4v16l13-8z',
+  search: 'M3 10a7 7 0 1 0 14 0a7 7 0 1 0-14 0M21 21l-6-6',
+  lock: 'M5 13a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2zM8 11V7a4 4 0 1 1 8 0v4',
   pause: 'M6 5h4v14H6zM14 5h4v14h-4z'
 };
 const ic = (n, s = 22) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICONS[n]}"/></svg>`;
@@ -66,9 +68,10 @@ const RADII = [2, 5, 10, 25, 50, 100, 500];
 const AV_COLORS = ['#FF2E7E', '#FFB21C', '#0FB5B2', '#FF6A3D', '#B44CFF', '#19A55B'];
 const QUICK = ['מתאים לך להחליף?', 'איפה נוח לך להיפגש?', 'אני יכול/ה היום', 'מתאים מחר?', 'אפשר תמונה נוספת של הצמח?'];
 const REPORT_REASONS = ['הטרדה או התנהגות פוגענית', 'ספאם או הונאה', 'תוכן לא הולם', 'לא הגיע/ה למפגש', 'אחר'];
-const MODE = { swap: { t: 'להחלפה', i: '🔄', c: 'm-swap' }, gift: { t: 'במתנה', i: '🎁', c: 'm-gift' }, both: { t: 'מתנה או החלפה', i: '💚', c: 'm-both' } };
-const MODE_ACT = { swap: 'להחליף', gift: 'למסור במתנה', both: 'גם וגם' };
-const MODE_HINT = { swap: 'בתמורה לצמח אחר', gift: 'בלי תמורה, למי שירצה', both: 'מה שמתאים לצד השני' };
+const MODE = { swap: { t: 'להחלפה', i: '🔄', c: 'm-swap' }, gift: { t: 'במתנה', i: '🎁', c: 'm-gift' }, both: { t: 'מתנה או החלפה', i: '💚', c: 'm-both' }, sale: { t: 'למכירה', i: '🏷️', c: 'm-sale' } };
+const MODE_ACT = { swap: 'להחליף', gift: 'למסור במתנה', both: 'גם וגם', sale: 'למכור' };
+const MODE_HINT = { swap: 'בתמורה לצמח אחר', gift: 'בלי תמורה, למי שירצה', both: 'מתנה או החלפה', sale: 'במחיר שתקבעו' };
+const priceTxt = p => (p && p.price ? `₪${p.price}` : '');
 const modeOf = p => (p && MODE[p.mode] ? p.mode : 'swap');
 // מי רואה את פאנל הניהול של המשתלות (חייב להתאים לכתובת ב-firestore.rules)
 const ADMIN_EMAILS = ['netanelkk9@gmail.com'];
@@ -233,12 +236,12 @@ const inActiveMatch = pid => S.matches.some(m => m.status !== 'cancelled' && m.p
 function feed() {
   const f = filters;
   return S.pool.filter(p =>
-    !S.priv.swipes[p.id] && !inActiveMatch(p.id) && !isBlocked(p.ownerId) &&
+    !p.frozen && !S.priv.swipes[p.id] && !inActiveMatch(p.id) && !isBlocked(p.ownerId) &&
     dist(p) <= S.profile.radius &&
     (f.cat === 'all' || catById(p.catId).cat === f.cat) &&
     (f.offer === 'all' || p.offer === f.offer) &&
     (f.delivery === 'all' || p.delivery === f.delivery || p.delivery === 'both') &&
-    (f.mode === 'all' || modeOf(p) === f.mode || modeOf(p) === 'both')
+    modeMatch(p, f.mode)
   ).sort((a, b) => score(b) - score(a));
 }
 
@@ -266,7 +269,7 @@ function notifList() {
   const out = [];
   S.incoming.forEach(r => {
     const first = Object.values(r.offerSnap || {})[0];
-    out.push({ t: r.t, text: first ? `🌿 ${r.fromInfo.name} רוצה להציע לך ${catById(first.catId).he} בתמורה ל${catById(r.targetSnap.catId).he} שלך.` : r.kind === 'ask' ? `💚 ${r.fromInfo.name} מתעניין/ת ב${catById(r.targetSnap.catId).he} שלך.` : `🎁 ${r.fromInfo.name} ישמח/תשמח לקבל את ה${catById(r.targetSnap.catId).he} שלך.`, link: 'matches', unread: true });
+    out.push({ t: r.t, text: first ? `🌿 ${r.fromInfo.name} רוצה להציע לך ${catById(first.catId).he} בתמורה ל${catById(r.targetSnap.catId).he} שלך.` : r.kind === 'buy' ? `🏷️ ${r.fromInfo.name} רוצה לקנות את ה${catById(r.targetSnap.catId).he} שלך.` : r.kind === 'ask' ? `💚 ${r.fromInfo.name} מתעניין/ת ב${catById(r.targetSnap.catId).he} שלך.` : `🎁 ${r.fromInfo.name} ישמח/תשמח לקבל את ה${catById(r.targetSnap.catId).he} שלך.`, link: 'matches', unread: true });
   });
   activePromos().filter(pr => iWant(pr)).forEach(pr => {
     out.push({ t: pr.t, text: `🌿 ${pr.nurseryName} מציעה ${pr.title}, ${fmtKm(dist(pr))} ממך.`, link: 'nursery/' + pr.nurseryId, unread: (pr.t || 0) > (S.priv.alertsSeenAt || 0) });
@@ -299,7 +302,7 @@ function locate(fromUser) {
     const c = nearestCity(h), prev = S.here;
     S.here = { ...h, city: km(h, c) > 12 ? 'ליד ' + c.n : c.n };
     lsSet('ll_live', '1'); lsSet('ll_granted', '1');
-    if (fromUser || !prev || km(prev, h) > 1) live(['discover', 'map', 'nursery']);
+    if (fromUser || !prev || km(prev, h) > 1) live(['discover', 'swipe', 'map', 'nursery']);
     if (S.profile && km(h, S.profile) > 15 && (!prev || km(prev, h) > 15)) toast(`📍 נראה שאתם ב${S.here.city}. מציגים צמחים לידכם.`);
   }, err => {
     locating = false;
@@ -395,10 +398,10 @@ function live(routes) {
 }
 function renderTabs(active) {
   const n = unreadMsgs() + S.incoming.length;
-  const T = [['discover', 'cards', 'גילוי'], ['map', 'map', 'מפה'], ['add', 'plus', 'הוספה'], ['matches', 'heart', 'התאמות'], ['profile', 'user', 'פרופיל']];
+  const T = [['discover', 'search', 'חיפוש'], ['map', 'map', 'מפה'], ['add', 'plus', 'הוספה'], ['matches', 'heart', 'התאמות'], ['profile', 'user', 'פרופיל']];
   $('#tabbar').innerHTML = T.map(([k, i, l]) => k === 'add'
     ? `<a href="#add" aria-label="הוספת צמח" class="${active === k ? 'on' : ''}"><span class="add">${ic('plus', 28)}</span></a>`
-    : `<a href="#${k}" class="${active === k || (active === 'plant' && k === 'discover') ? 'on' : ''}">${ic(i, 24)}${l}${k === 'matches' && n ? `<span class="dot">${n}</span>` : ''}</a>`).join('');
+    : `<a href="#${k}" class="${active === k || ((active === 'plant' || active === 'swipe') && k === 'discover') ? 'on' : ''}">${ic(i, 24)}${l}${k === 'matches' && n ? `<span class="dot">${n}</span>` : ''}</a>`).join('');
 }
 function refreshBadges() {
   if (!S.booted) return;
@@ -618,7 +621,7 @@ function syncStats() {
 // גילוי (Swipe)
 // =====================================================
 let lastSwipe = null;
-VIEWS.discover = function () {
+VIEWS.swipe = function () {
   const R = S.profile.radius;
   const nearWish = S.pool.filter(p => iWant(p) && dist(p) <= R && !isBlocked(p.ownerId)).sort((a, b) => dist(a) - dist(b));
   const people = [...new Set(S.pool.filter(p => dist(p) <= R && !isBlocked(p.ownerId)).map(p => p.ownerId))].map(id => S.users[id]).filter(Boolean).sort((a, b) => dist(a) - dist(b)).slice(0, 20);
@@ -628,7 +631,7 @@ VIEWS.discover = function () {
   $('#view').innerHTML = `
   <div class="disc">
     <header class="hero2">
-      <div class="hrow"><h1>${greeting()}, ${esc(S.profile.name)}</h1>
+      <div class="hrow"><button class="icon-btn" data-a="open" data-to="discover" aria-label="חזרה לחיפוש">${ic('back', 22)}</button><h1 style="flex:1">🔥 גלה עוד</h1>
         <button class="icon-btn" data-a="notifs" aria-label="התראות">${ic('bell', 22)}<span class="dot" id="bell-dot" style="${n ? '' : 'display:none'}">${n}</span></button></div>
       <div class="hrow2">
         <button class="loc" data-a="filters">${ic('pin', 16)} ${esc(locLabel())}, ${radiusLabel(R)}</button>
@@ -646,15 +649,80 @@ VIEWS.discover = function () {
       <button class="act super" data-a="decide" data-d="super" aria-label="סופר מעוניין">${ic('star', 26)}</button>
       <button class="act save" data-a="decide" data-d="save" aria-label="שמירה לאחר כך">${ic('bookmark', 20)}</button>
     </div>
-  </div>
-  ${nearWish.length ? `<h2 class="section-t">מרשימת המשאלות שלך</h2><div class="strip">${nearWish.map(miniCard).join('')}</div>` : ''}
-  ${nurs.length ? `<h2 class="section-t">משתלות לידך</h2><div class="strip">${nurs.map(nurseryCard).join('')}</div>` : ''}
-  ${people.length ? `<h2 class="section-t">אנשים לידך</h2><div class="strip">${people.map(u => `<div class="person">${avatar(u)}${esc(u.name)}<div class="small muted">${fmtKm(dist(u))}</div></div>`).join('')}</div>` : ''}
-  <div style="height:20px"></div>`;
+  </div>`;
   renderDeck();
-  hydrate(nearWish.slice(0, 8));
 };
-const modeTag = p => { const m = MODE[modeOf(p)]; return `<span class="mode ${m.c}">${m.i} ${m.t}</span>`; };
+
+// =====================================================
+// חיפוש (המסך הראשי)
+// =====================================================
+const SQ = { q: '', mode: 'all' };
+const plantMatchesQ = (p, q) => { const c = catById(p.catId); return c.he.toLowerCase().includes(q) || (c.sci || '').toLowerCase().includes(q) || (CATS[c.cat] || '').includes(q); };
+function searchList(radius) {
+  const q = cleanName(SQ.q).toLowerCase();
+  let list = S.pool.filter(p => !p.frozen && !isBlocked(p.ownerId) && dist(p) <= radius && modeMatch(p, SQ.mode));
+  if (q) list = list.filter(p => plantMatchesQ(p, q));
+  return list.sort((a, b) => {
+    if (q) { const sa = pName(a).toLowerCase().startsWith(q) ? 0 : 1, sb = pName(b).toLowerCase().startsWith(q) ? 0 : 1; if (sa !== sb) return sa - sb; }
+    return (dist(a) - dist(b)) || ((b.t || 0) - (a.t || 0));
+  });
+}
+function resultCard(p) {
+  const u = owner(p);
+  return `<button class="rcard" data-a="open" data-to="plant/${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div>
+    <div class="mt">${esc(pName(p))}<div class="ms">${esc(u.name || p.ownerName || '')}, ${fmtKm(dist(p))}</div></div></button>`;
+}
+function promoResult(pr) {
+  return `<button class="rcard promo-r" data-a="promo" data-id="${pr.id}"><div class="mv">${promoVisual(pr)}<span class="mode m-nursery">🌿 משתלה</span></div>
+    <div class="mt">${esc(pr.title)}<div class="ms">${pr.deal ? esc(pr.deal) + ', ' : ''}${esc(pr.nurseryName)}</div></div></button>`;
+}
+function renderResults() {
+  const box = $('#results'); if (!box) return;
+  const R = S.profile.radius, q = cleanName(SQ.q).toLowerCase();
+  const list = searchList(R);
+  const promos = activePromos().filter(pr => !q || pr.title.toLowerCase().includes(q) || (pr.catId && catById(pr.catId).he.toLowerCase().includes(q))).slice(0, 3);
+  const items = list.map(resultCard);
+  promos.forEach((pr, i) => items.splice(Math.min(items.length, 2 + i * 6), 0, promoResult(pr)));
+  const title = q ? (list.length ? `${list.length === 1 ? 'נמצא צמח אחד' : `נמצאו ${list.length} צמחים`}` : '') : 'צמחים לידך';
+  if (items.length) { box.innerHTML = `<h2 class="section-t" style="margin-top:14px">${title}</h2><div class="rgrid">${items.join('')}</div>`; return; }
+  const far = searchList(9999).length;
+  box.innerHTML = `<div class="empty"><h3>${q ? `לא מצאנו "${esc(SQ.q.trim())}" לידך` : 'עוד אין כאן צמחים'}</h3>
+    ${far ? `<p>יש ${far === 1 ? 'אחד' : far} כאלה רחוק יותר.</p><button class="btn sun sm" data-a="searchFar" style="margin:0 auto 10px">חיפוש בכל הארץ</button>` : ''}
+    ${q ? `<p>נוסיף לרשימת המשאלות שלך ונודיע כשמישהו יעלה כזה?</p><button class="btn hot sm" data-a="wishFromSearch" style="margin:auto">${ic('bell', 16)} תודיעו לי</button>`
+      : `<p>הזמינו חברים שאוהבים צמחים, וככל שיהיו יותר אנשים יהיו יותר צמחים.</p><button class="btn hot sm" data-a="invite" style="margin:auto">${ic('share', 16)} הזמנת חברים</button>`}</div>`;
+}
+VIEWS.discover = function () {
+  const R = S.profile.radius;
+  const n = notifList().filter(x => x.unread).length;
+  const canLive = !S.here && liveOn() && !!navigator.geolocation;
+  const nearWish = S.pool.filter(p => !p.frozen && iWant(p) && dist(p) <= R && !isBlocked(p.ownerId)).sort((a, b) => dist(a) - dist(b));
+  const nurs = S.nurseries.filter(x => x.active && dist(x) <= Math.max(R, 30)).sort((a, b) => dist(a) - dist(b)).slice(0, 12);
+  const swipeN = feed().length;
+  $('#view').innerHTML = `
+  <header class="hero2 search-hero">
+    <div class="hrow"><h1>${greeting()}, ${esc(S.profile.name)}</h1>
+      <button class="icon-btn" data-a="notifs" aria-label="התראות">${ic('bell', 22)}<span class="dot" id="bell-dot" style="${n ? '' : 'display:none'}">${n}</span></button></div>
+    <div class="sbox">${ic('search', 20)}<input id="sq" type="search" placeholder="מה מחפשים? מונסטרה, פוטוס, קקטוס…" value="${esc(SQ.q)}" autocomplete="off" enterkeyhint="search">${SQ.q ? `<button data-a="clearSearch" aria-label="ניקוי">${ic('x', 18)}</button>` : ''}</div>
+    <div class="hrow2">
+      <button class="loc" data-a="filters">${ic('pin', 16)} ${esc(locLabel())}, ${radiusLabel(R)}</button>
+      ${canLive ? `<button class="live-pill" data-a="useLive">${ic('pin', 14)} איפה אני?</button>` : ''}
+      <span class="sp"></span><button class="hbtn" data-a="refresh" aria-label="רענון">${ic('refresh', 18)}</button>
+    </div>
+  </header>
+  <div class="mchips">${[['all', 'הכול'], ['swap', '🔄 להחלפה'], ['gift', '🎁 במתנה'], ['sale', '🏷️ למכירה']].map(([k, l]) => `<button class="sel ${SQ.mode === k ? 'on' : ''}" data-a="searchMode" data-k="${k}">${l}</button>`).join('')}</div>
+  <button class="swipe-cta" data-a="open" data-to="swipe"><span class="sc-ic">🔥</span><span><b>גלה עוד</b><span>החליקו על צמחים לידכם ומצאו התאמות${swipeN ? ` (${swipeN})` : ''}</span></span>${ic('back', 20).replace('class="ic"', 'class="ic flip"')}</button>
+  ${!SQ.q && nearWish.length ? `<h2 class="section-t">מרשימת המשאלות שלך</h2><div class="strip">${nearWish.map(miniCard).join('')}</div>` : ''}
+  <div id="results"></div>
+  ${!SQ.q && nurs.length ? `<h2 class="section-t">משתלות לידך</h2><div class="strip">${nurs.map(nurseryCard).join('')}</div>` : ''}
+  <div style="height:24px"></div>`;
+  renderResults();
+};
+const modeTag = p => {
+  if (p && p.frozen) return `<span class="mode m-frozen">🔒 מוקפא</span>`;
+  const k = modeOf(p), m = MODE[k];
+  return `<span class="mode ${m.c}">${m.i} ${k === 'sale' && p.price ? priceTxt(p) : m.t}</span>`;
+};
+const modeMatch = (p, want) => want === 'all' || modeOf(p) === want || (modeOf(p) === 'both' && (want === 'swap' || want === 'gift'));
 function miniCard(p) {
   return `<button class="mini" data-a="open" data-to="plant/${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${esc(p.ownerName)}, ${fmtKm(dist(p))}</div></div></button>`;
 }
@@ -777,7 +845,7 @@ async function afterLike(p, sup) {
   const me = uid();
   const u = await getUser(p.ownerId);
   setDoc(doc(db, 'likes', me + '_' + p.id), { from: me, to: p.ownerId, plantId: p.id, super: !!sup, t: Date.now() }).catch(errLog);
-  if (modeOf(p) === 'gift') return openRequestSheet(p, u, sup);
+  if (modeOf(p) === 'gift' || modeOf(p) === 'sale') return openRequestSheet(p, u, sup);
   let mine = theyWantMine(u).map(x => x.id);
   let mutual = false;
   try {
@@ -798,6 +866,16 @@ function openRequestSheet(p, u, sup) {
   if (S.outgoing.some(r => r.target === p.id && r.status === 'pending')) { toast(`כבר שלחתם בקשה על הצמח הזה. מחכים לתשובה מ${u.name}.`); return; }
   const mode = modeOf(p);
   const msgBox = `<p class="label">כמה מילים ל${esc(u.name)} (לא חובה)</p><textarea class="field" id="req-msg" rows="2" maxlength="300" placeholder="היי! אשמח מאוד, יש לי מקום מושלם בשבילו 🌿"></textarea>`;
+  if (mode === 'sale') {
+    sheet(`<h3>🏷️ רוצים לקנות?</h3>
+    <div class="deal">${esc(priceTxt(p) || 'מחיר לפי הסכמה')}</div>
+    <p class="muted">שלחו הודעה ל${esc(u.name)}. אם ${esc(u.name)} יאשר/תאשר, תדברו בצ'אט ותסגרו איסוף ותשלום ביניכם (מזומן, ביט וכו').</p>
+    <p class="label">הודעה ל${esc(u.name)}</p><textarea class="field" id="req-msg" rows="2" maxlength="300" placeholder="היי! הצמח עדיין זמין? מתי אפשר לאסוף?"></textarea>
+    <div class="err" id="req-err"></div>
+    <button class="btn hot" data-a="sendRequest" data-id="${p.id}">🏷️ שליחה ל${esc(u.name)}</button>
+    <button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
+    return;
+  }
   if (mode === 'gift') {
     sheet(`<h3>🎁 רוצים לקבל במתנה?</h3>
     <p class="muted">${esc(u.name)} מוסר/ת את ה${esc(pName(p))} בלי תמורה. שלחו בקשה, ואם ${esc(u.name)} יאשר/תאשר, תתאמו איסוף בצ'אט.</p>
@@ -829,7 +907,7 @@ async function sendRequest(el) {
   const p = S.pool.find(x => x.id === el.dataset.id); if (!p) return;
   const u = await getUser(p.ownerId);
   const ids = $$('#sheet input[name=offer]:checked').map(i => i.value);
-  const kind = ids.length ? 'swap' : (modeOf(p) === 'swap' ? 'ask' : 'gift');
+  const kind = modeOf(p) === 'sale' ? 'buy' : ids.length ? 'swap' : (modeOf(p) === 'swap' ? 'ask' : 'gift');
   const snap = {};
   ids.forEach(id => { const x = S.myPlants.find(y => y.id === id); if (x) snap[id] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer, qty: x.qty || 1 }; });
   const mEl = $('#req-msg'); const msg = mEl ? mEl.value.trim() : '';
@@ -837,10 +915,10 @@ async function sendRequest(el) {
   try {
     await addDoc(collection(db, 'requests'), {
       from: uid(), to: p.ownerId, fromInfo: pubInfo(S.profile), toInfo: pubInfo(u),
-      target: p.id, targetSnap: { catId: p.catId, thumb: p.thumb || null, offer: p.offer, qty: p.qty || 1 },
+      target: p.id, targetSnap: { catId: p.catId, thumb: p.thumb || null, offer: p.offer, qty: p.qty || 1, price: p.price || null },
       offer: ids, offerSnap: snap, kind, msg, status: 'pending', seen: false, t: Date.now()
     });
-    closeSheet(); toast(kind === 'swap' ? `ההצעה נשלחה ל${u.name}. נעדכן אתכם כשתגיע תשובה.` : kind === 'ask' ? `ההתעניינות נשלחה ל${u.name} 💚 נעדכן אתכם כשתגיע תשובה.` : `הבקשה נשלחה ל${u.name} 🎁 נעדכן אתכם כשתגיע תשובה.`);
+    closeSheet(); toast(kind === 'buy' ? `ההודעה נשלחה ל${u.name} 🏷️ נעדכן אתכם כשתגיע תשובה.` : kind === 'swap' ? `ההצעה נשלחה ל${u.name}. נעדכן אתכם כשתגיע תשובה.` : kind === 'ask' ? `ההתעניינות נשלחה ל${u.name} 💚 נעדכן אתכם כשתגיע תשובה.` : `הבקשה נשלחה ל${u.name} 🎁 נעדכן אתכם כשתגיע תשובה.`);
   } catch (e) { errLog(e); busy(el, false); $('#req-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
 }
 async function acceptReq(rid, toChat, el) {
@@ -854,7 +932,7 @@ async function acceptReq(rid, toChat, el) {
   try {
     const u = await getUser(r.from);
     const theirPlants = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
-    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', kind: r.kind || (r.offer.length ? 'swap' : 'gift'), status: toChat || r.kind === 'ask' ? 'discussing' : 'agreed' });
+    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', kind: r.kind || (r.offer.length ? 'swap' : 'gift'), status: toChat || r.kind === 'ask' || r.kind === 'buy' ? 'discussing' : 'agreed' });
     await updateDoc(doc(db, 'requests', rid), { status: 'accepted', matchId: m.id });
     if (r.msg) addDoc(collection(db, 'matches', m.id, 'messages'), { from: uid(), sys: true, text: `💬 ${r.fromInfo.name} כתב/ה: ${r.msg}`, t: Date.now() + 1 }).catch(errLog);
     if (toChat) go('chat/' + m.id); else showMatch(m);
@@ -869,7 +947,7 @@ async function createMatch(o) {
   const ex = await getDoc(ref);
   if (ex.exists() && ex.data().status !== 'cancelled') return { id, ...ex.data() };
   const snap = {};
-  o.mineIds.forEach(pid => { const x = S.myPlants.find(p => p.id === pid); if (x) snap[pid] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer, qty: x.qty || 1, owner: me }; });
+  o.mineIds.forEach(pid => { const x = S.myPlants.find(p => p.id === pid); if (x) snap[pid] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer, qty: x.qty || 1, price: x.price || null, owner: me }; });
   o.theirIds.forEach(pid => { const x = o.theirPlants.find(p => p.id === pid); if (x) snap[pid] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer || 'full', qty: x.qty || 1, owner: u.id }; });
   const now = Date.now();
   const data = {
@@ -887,7 +965,16 @@ function showMatch(m) {
   const me = uid(), o = otherId(m), name = otherInfo(m).name;
   const mineIds = m.give[me] || [], theirIds = m.give[o] || [];
   const mp = mineIds.length ? snapOf(m, mineIds[0]) : null, tp = theirIds.length ? snapOf(m, theirIds[0]) : null;
-  const ask = m.kind === 'ask';
+  const ask = m.kind === 'ask', buy = m.kind === 'buy';
+  if (buy) {
+    const pl = mp || tp;
+    const t2 = mp ? 'יש קונה!' : 'אפשר לסגור!';
+    const l2 = mp ? `${esc(name)} רוצה לקנות את ה${esc(pName(mp))} שלך 🏷️` : `ה${esc(pName(tp))} של ${esc(name)}${tp.price ? `, ₪${tp.price}` : ''} 🏷️`;
+    $('#overlay').innerHTML = `<div class="match" role="dialog" aria-label="${t2}"><div class="burst">${burstLeaves(18)}</div>
+      <div class="pair"><div class="bubble from-r">${visual(pl)}</div></div><h1>${t2}</h1><p>תאמו בצ'אט איסוף ותשלום.</p><div class="swapline">${l2}</div>
+      <div class="btns"><button class="btn sun" data-a="matchChat" data-id="${m.id}">${ic('chat')} לצ'אט</button><button class="btn light" data-a="closeOverlay">אחר כך</button></div></div>`;
+    $('#overlay').classList.add('open'); return;
+  }
   const title = ask ? 'אפשר לדבר!' : !mp ? 'מתנה בדרך אליך!' : !tp ? 'מצאת למי למסור!' : 'יש התאמה!';
   const sub = ask ? 'עכשיו אפשר לדבר בצ׳אט ולמצוא מה מתאים לשניכם.' : mp && tp ? 'הצמחים שלכם מצאו אחד את השני.' : 'עוד צמח מצא בית חדש.';
   const line = ask ? (!mp ? `${esc(name)} פתוח/ה לדבר על ה${esc(pName(tp))} 💚` : `${esc(name)} מתעניין/ת ב${esc(pName(mp))} שלך 💚`)
@@ -922,15 +1009,17 @@ VIEWS.plant = async function (id) {
   <div class="detail-v">${visual(p)}<button class="icon-btn back" data-a="back" aria-label="חזרה">${ic('back')}</button>${mine ? '' : `<span class="badge b-${t}" style="top:auto;bottom:18px">${TYPE_LABEL[t]}</span>`}</div>
   <div class="pad">
     <h1 style="font-size:32px;font-weight:900">${esc(pName(p))}</h1><p class="sci" style="font-size:15px">${esc(catById(p.catId).sci)}</p>
-    <div class="mode-big ${MODE[modeOf(p)].c}">${MODE[modeOf(p)].i} ${MODE[modeOf(p)].t}<span>${MODE_HINT[modeOf(p)]}</span></div>
+    ${p.frozen ? `<div class="mode-big m-frozen">🔒 המודעה מוקפאת<span>${mine ? 'אחרים לא רואים אותה ולא יכולים לפנות עליה' : 'הצמח שמור כרגע למישהו'}</span></div>`
+      : `<div class="mode-big ${MODE[modeOf(p)].c}">${MODE[modeOf(p)].i} ${modeOf(p) === 'sale' && p.price ? `למכירה, ${priceTxt(p)}` : MODE[modeOf(p)].t}<span>${MODE_HINT[modeOf(p)]}</span></div>`}
     <div class="facts"><div class="fact"><b>${OFFER[p.offer]}</b><span>מה מוצע</span></div><div class="fact"><b>${COND[p.condition] || ''}</b><span>מצב</span></div><div class="fact"><b>${p.qty || 1}</b><span>כמות</span></div></div>
     <div class="owner">${avatar(u)}<div style="flex:1"><b>${esc(u.name)}</b><div class="small muted">${esc(u.city || p.city || '')}${mine ? '' : ', ' + fmtKm(dist(p)) + ' ממך'}</div></div><div style="text-align:center"><b style="font-family:var(--font-d)">${rating(u)}</b><div class="small muted">${u.swaps || 0} החלפות</div></div></div>
-    ${mine || modeOf(p) === 'gift' ? '' : `<p class="label">${modeOf(p) === 'both' ? 'אם תרצו להציע משהו בתמורה' : `${esc(u.name)} רוצה בתמורה`}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
+    ${mine || p.frozen || ['gift', 'sale'].includes(modeOf(p)) ? '' : `<p class="label">${modeOf(p) === 'both' ? 'אם תרצו להציע משהו בתמורה' : `${esc(u.name)} רוצה בתמורה`}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
     <p class="label">מסירה</p><div class="chips"><span class="chip">${DELIV[p.delivery] || ''}</span><span class="chip">${ic('shield', 14)} מפגש במקום ציבורי</span></div>
     <div style="margin-top:22px">
     ${mine ? `<button class="btn hot" data-a="myPlantSheet" data-id="${p.id}">✏️ עריכת המודעה</button>`
       : m ? `<button class="btn primary" data-a="open" data-to="chat/${m.id}">${ic('chat')} מעבר לצ'אט</button>`
-        : `<button class="btn hot" data-a="likeDetail" data-id="${p.id}">${modeOf(p) === 'gift' ? '🎁 אשמח לקבל' : ic('heart') + ' מעוניין'}</button>
+        : p.frozen ? `<button class="btn ghost" disabled>🔒 שמור כרגע למישהו</button>`
+        : `<button class="btn hot" data-a="likeDetail" data-id="${p.id}">${modeOf(p) === 'gift' ? '🎁 אשמח לקבל' : modeOf(p) === 'sale' ? '🏷️ אני רוצה לקנות' : '💚 מעוניין/ת'}</button>
            <button class="btn ghost" data-a="toggleSave" data-id="${p.id}">${ic('bookmark')} ${saved ? 'הסרה מהשמורים' : 'שמירה לאחר כך'}</button>`}
     </div>
   </div>`;
@@ -983,7 +1072,7 @@ function initMap(near, tries = 0) {
 // הוספת צמח
 // =====================================================
 let draft = null;
-const newDraft = () => ({ step: 'photo', img: null, catId: null, guesses: [], mode: 'swap', offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup', open: true, wants: [] });
+const newDraft = () => ({ step: 'photo', img: null, catId: null, guesses: [], mode: 'swap', price: '', offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup', open: true, wants: [] });
 VIEWS.add = function () {
   if (!draft) draft = newDraft();
   const d = draft;
@@ -1003,13 +1092,14 @@ VIEWS.add = function () {
     ${c && c.sci ? `<p class="sci" style="margin-top:6px">${esc(c.sci)}</p>` : `<p class="small muted" style="margin-top:6px">אפשר לכתוב כל שם. ההצעות הן רק לעזרה.</p>`}
     <div class="err" id="add-err"></div>
     <p class="label">מה תרצו לעשות איתו?</p>
-    <div class="modes">${Object.entries(MODE).map(([k, m]) => `<button class="mode-opt ${m.c} ${d.mode === k ? 'on' : ''}" data-a="draftSet" data-k="mode" data-v="${k}"><i>${m.i}</i><b>${k === 'swap' ? 'להחליף' : k === 'gift' ? 'למסור במתנה' : 'גם וגם'}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
+    <div class="modes">${Object.entries(MODE).map(([k, m]) => `<button class="mode-opt ${m.c} ${d.mode === k ? 'on' : ''}" data-a="draftSet" data-k="mode" data-v="${k}"><i>${m.i}</i><b>${MODE_ACT[k]}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
+    ${d.mode === 'sale' ? `<p class="label">מחיר</p><div class="price-in"><input class="field" id="price" type="number" inputmode="numeric" min="1" max="99999" placeholder="למשל 40" value="${esc(d.price)}"><span>₪</span></div>` : ''}
     <p class="label">מה אתם מציעים?</p><div class="chips" style="gap:8px">${Object.entries(OFFER).map(([k, v]) => `<button class="sel ${d.offer === k ? 'on' : ''}" data-a="draftSet" data-k="offer" data-v="${k}">${v}</button>`).join('')}</div>
     <p class="label">מצב הצמח</p><div class="chips" style="gap:8px">${Object.entries(COND).map(([k, v]) => `<button class="sel ${d.condition === k ? 'on' : ''}" data-a="draftSet" data-k="condition" data-v="${k}">${v}</button>`).join('')}</div>
     <p class="label">כמות</p><div class="stepper"><button data-a="qty" data-v="1" aria-label="יותר">+</button><b id="qty">${d.qty}</b><button data-a="qty" data-v="-1" aria-label="פחות">−</button></div>
     <p class="label">מסירה</p><div class="chips" style="gap:8px">${Object.entries(DELIV).map(([k, v]) => `<button class="sel ${d.delivery === k ? 'on' : ''}" data-a="draftSet" data-k="delivery" data-v="${k}">${v}</button>`).join('')}</div>
-    ${d.mode === 'gift' ? '<input type="checkbox" id="open" checked hidden>' : `<label class="toggle"><span><b>💚 פתוח/ה להצעות</b><br><span class="small muted">אפשר לקבל הצעות גם על צמחים שלא ברשימת המשאלות שלכם.</span></span><input type="checkbox" id="open" ${d.open ? 'checked' : ''} data-change="open"></label>`}
-    <div ${d.mode === 'gift' ? 'hidden' : ''}>
+    ${['gift', 'sale'].includes(d.mode) ? '<input type="checkbox" id="open" checked hidden>' : `<label class="toggle"><span><b>💚 פתוח/ה להצעות</b><br><span class="small muted">אפשר לקבל הצעות גם על צמחים שלא ברשימת המשאלות שלכם.</span></span><input type="checkbox" id="open" ${d.open ? 'checked' : ''} data-change="open"></label>`}
+    <div ${['gift', 'sale'].includes(d.mode) ? 'hidden' : ''}>
     <p class="label">מה הייתם רוצים לקבל בתמורה?</p>
     <div class="row"><input class="field" id="want-in" data-suggest="want" placeholder="למשל: פילודנדרון" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWant">הוספה</button></div>
     <div class="sugg" id="want-in-sugg"></div>
@@ -1025,10 +1115,13 @@ function keepName() {
   const inp = $('#plant-name'); if (!inp || !draft) return;
   const c = toCat(inp.value); draft.catId = c ? c.id : null;
   const o = $('#open'); if (o) draft.open = o.checked;
+  const pr = $('#price'); if (pr) draft.price = pr.value;
 }
 async function savePlant(el) {
   keepName();
   if (!draft.catId) { $('#add-err').textContent = 'כתבו את שם הצמח.'; $('#plant-name').focus(); return; }
+  const price = Math.round(+draft.price || 0);
+  if (draft.mode === 'sale' && price < 1) { $('#add-err').textContent = 'כתבו מחיר למכירה.'; const pe = $('#price'); if (pe) pe.focus(); return; }
   busy(el, true, 'מפרסמים…');
   try {
     const ref = doc(collection(db, 'plants'));
@@ -1036,7 +1129,7 @@ async function savePlant(el) {
     const pr = S.profile;
     const data = {
       ownerId: uid(), ownerName: pr.name, ownerColor: pr.color || '#19A55B', ownerPhoto: pr.photo || null, city: pr.city, lat: pr.lat, lng: pr.lng,
-      catId: draft.catId, mode: draft.mode, offer: draft.offer, condition: draft.condition, qty: draft.qty, delivery: draft.delivery,
+      catId: draft.catId, mode: draft.mode, price: draft.mode === 'sale' ? price : null, frozen: false, offer: draft.offer, condition: draft.condition, qty: draft.qty, delivery: draft.delivery,
       open: $('#open').checked, available: true, hasPhoto: !!draft.img, thumb, t: Date.now()
     };
     const b = writeBatch(db);
@@ -1071,7 +1164,7 @@ VIEWS.matches = function () {
     const first = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
     const target = { id: r.target, ...r.targetSnap };
     return `<div class="req"><div class="row"><div class="duo"><span class="t">${visual(first[0], r.kind)}</span><span class="t">${visual(target)}</span></div>
-      <div class="li-main">${first.length ? `<b>${esc(r.fromInfo.name)}</b> רוצה להציע לך <b>${first.map(x => esc(pName(x))).join(' + ')}</b> בתמורה ל<b>${esc(pName(target))}</b> שלך.` : (r.kind === 'ask' ? `💚 <b>${esc(r.fromInfo.name)}</b> מתעניין/ת ב<b>${esc(pName(target))}</b> שלך. עוד אין לו/ה צמח להחלפה, אבל אפשר לדבר.` : `🎁 <b>${esc(r.fromInfo.name)}</b> ישמח/תשמח לקבל במתנה את ה<b>${esc(pName(target))}</b> שלך.`)}${r.msg ? `<div class="req-msg">"${esc(r.msg)}"</div>` : ''}<div class="small muted">${esc(r.fromInfo.city || '')}, ${ago(r.t)}</div></div></div>
+      <div class="li-main">${first.length ? `<b>${esc(r.fromInfo.name)}</b> רוצה להציע לך <b>${first.map(x => esc(pName(x))).join(' + ')}</b> בתמורה ל<b>${esc(pName(target))}</b> שלך.` : (r.kind === 'buy' ? `🏷️ <b>${esc(r.fromInfo.name)}</b> רוצה לקנות את ה<b>${esc(pName(target))}</b> שלך${r.targetSnap.price ? ` (₪${r.targetSnap.price})` : ''}.` : r.kind === 'ask' ? `💚 <b>${esc(r.fromInfo.name)}</b> מתעניין/ת ב<b>${esc(pName(target))}</b> שלך. עוד אין לו/ה צמח להחלפה, אבל אפשר לדבר.` : `🎁 <b>${esc(r.fromInfo.name)}</b> ישמח/תשמח לקבל במתנה את ה<b>${esc(pName(target))}</b> שלך.`)}${r.msg ? `<div class="req-msg">"${esc(r.msg)}"</div>` : ''}<div class="small muted">${esc(r.fromInfo.city || '')}, ${ago(r.t)}</div></div></div>
       <div class="req-btns"><button class="btn primary sm" style="flex:1" data-a="reqAccept" data-id="${r.id}">אישור</button><button class="btn ghost sm" style="flex:1" data-a="reqChat" data-id="${r.id}">צ'אט</button><button class="btn ghost sm" style="flex:1" data-a="reqDecline" data-id="${r.id}">דחייה</button></div></div>`;
   }).join('');
   $('#view').innerHTML = `<div class="ph"><h1>התאמות</h1></div>
@@ -1085,7 +1178,7 @@ function matchRow(m) {
   const mp = snapOf(m, (m.give[me] || [])[0]), tp = snapOf(m, (m.give[o] || [])[0]);
   const n = (m.unread || {})[me] || 0;
   return `<button class="li" data-a="open" data-to="chat/${m.id}"><div class="duo"><span class="t">${visual((m.give[me] || []).length ? mp : null, m.kind)}</span><span class="t">${visual((m.give[o] || []).length ? tp : null, m.kind)}</span></div>
-  <div class="li-main"><div class="li-t">${m.kind === 'ask' ? `💚 ${esc(pName((m.give[me] || []).length ? mp : tp))}` : !(m.give[me] || []).length ? `🎁 ${esc(pName(tp))} במתנה` : !(m.give[o] || []).length ? `🎁 ${esc(pName(mp))} במתנה ל${esc(info.name)}` : `${esc(pName(mp))} ⇄ ${esc(pName(tp))}`}</div><div class="li-s">${esc(info.name)}: ${esc(m.lastMsg || '')}</div></div>
+  <div class="li-main"><div class="li-t">${m.kind === 'buy' ? `🏷️ ${esc(pName((m.give[me] || []).length ? mp : tp))}` : m.kind === 'ask' ? `💚 ${esc(pName((m.give[me] || []).length ? mp : tp))}` : !(m.give[me] || []).length ? `🎁 ${esc(pName(tp))} במתנה` : !(m.give[o] || []).length ? `🎁 ${esc(pName(mp))} במתנה ל${esc(info.name)}` : `${esc(pName(mp))} ⇄ ${esc(pName(tp))}`}</div><div class="li-s">${esc(info.name)}: ${esc(m.lastMsg || '')}</div></div>
   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><span class="pill st-${m.status}">${STATUS[m.status]}</span>${n ? `<span class="unread">${n}</span>` : `<span class="small muted">${ago(m.lastAt)}</span>`}</div></button>`;
 }
 
@@ -1121,7 +1214,7 @@ function renderSwapbar(m) {
   const mine = (m.give[me] || []).map(pid => snapOf(m, pid)), theirs = (m.give[o] || []).map(pid => snapOf(m, pid));
   const el = $('#swapbar'); if (!el) return;
   if (!mine.length) mine.push({}); if (!theirs.length) theirs.push({});
-  const nm = arr => arr.map(x => x.catId ? esc(pName(x)) : (m.kind === 'ask' ? 'נדבר' : 'מתנה')).join(' + ');
+  const nm = arr => arr.map(x => x.catId ? esc(pName(x)) + (x.price ? ` ₪${x.price}` : '') : (m.kind === 'ask' ? 'נדבר' : m.kind === 'buy' ? 'תשלום' : 'מתנה')).join(' + ');
   el.innerHTML = `<div class="row sb"><div class="row">${mine.map(x => `<span class="thumb">${visual(x, m.kind)}</span>`).join('')}<b>${nm(mine)}</b></div><span aria-label="בתמורה ל">⇄</span><div class="row"><b>${nm(theirs)}</b>${theirs.map(x => `<span class="thumb">${visual(x, m.kind)}</span>`).join('')}</div></div>
   ${m.meeting ? `<div class="small" style="margin-top:8px">${icInline('calendar', 14)} ${esc(m.meeting.place)}, ${esc(fmtWhen(m.meeting.when))}</div>` : ''}`;
 }
@@ -1255,8 +1348,10 @@ function myPlantSheet(id) {
   const chips = (k, obj) => `<div class="chips" style="gap:8px">${Object.entries(obj).map(([kk, v]) => `<button class="sel ${p[k] === kk ? 'on' : ''}" data-a="editPlant" data-id="${p.id}" data-k="${k}" data-v="${kk}">${v}</button>`).join('')}</div>`;
   sheet(`<div class="row" style="margin-bottom:6px"><span class="thumb" style="width:60px;height:60px">${visual(p)}</span><div><h3 style="margin:0">${esc(pName(p))}</h3><div class="small muted">כל שינוי נשמר מיד</div></div></div>
   <p class="label">שם הצמח</p><input class="field" id="edit-name" data-suggest="editname" data-change="editName" data-id="${p.id}" value="${esc(pName(p))}" autocomplete="off" enterkeyhint="done"><div class="sugg" id="edit-name-sugg"></div>
+  <label class="toggle freeze ${p.frozen ? 'on' : ''}"><span><b>🔒 הקפאת המודעה</b><br><span class="small muted">שמור למישהו? המודעה תיעלם מהחיפוש ולא יוכלו לפנות עליה, עד שתבטלו.</span></span><input type="checkbox" data-change="pfrozen" data-id="${p.id}" ${p.frozen ? 'checked' : ''}></label>
   <p class="label">מה תרצו לעשות איתו?</p>
   <div class="modes">${Object.entries(MODE).map(([k, mm]) => `<button class="mode-opt ${mm.c} ${m === k ? 'on' : ''}" data-a="editPlant" data-id="${p.id}" data-k="mode" data-v="${k}"><i>${mm.i}</i><b>${MODE_ACT[k]}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
+  ${m === 'sale' ? `<p class="label">מחיר</p><div class="price-in"><input class="field" type="number" inputmode="numeric" min="1" max="99999" data-change="editPrice" data-id="${p.id}" value="${esc(p.price || '')}" placeholder="למשל 40"><span>₪</span></div>` : ''}
   <p class="label">מה אתם מציעים?</p>${chips('offer', OFFER)}
   <p class="label">מצב הצמח</p>${chips('condition', COND)}
   <p class="label">כמות</p><div class="stepper"><button data-a="editQty" data-id="${p.id}" data-v="1" aria-label="יותר">+</button><b id="edit-qty">${p.qty || 1}</b><button data-a="editQty" data-id="${p.id}" data-v="-1" aria-label="פחות">−</button></div>
@@ -1277,7 +1372,7 @@ function filtersSheet() {
   sheet(`<h3>מה לחפש?</h3>
   <label class="toggle" style="margin-top:6px"><span><b>📍 לפי המקום שבו אני עכשיו</b><br><span class="small muted">${S.here ? `מזוהה: ${esc(S.here.city)}` : `כבוי: מחפשים לפי ${esc(u.city)}`}</span></span><input type="checkbox" data-change="liveLoc" ${S.here ? 'checked' : ''}></label>
   <p class="label">מרחק מ${esc(locLabel())}</p><div class="chips" style="gap:8px">${RADII.map(r => `<button class="sel ${r === u.radius ? 'on' : ''}" data-a="filterRadius" data-r="${r}">${radiusLabel(r)}</button>`).join('')}</div>
-  <p class="label">מה מחפשים?</p>${grp('mode', { swap: '🔄 החלפה', gift: '🎁 מתנה' })}
+  <p class="label">מה מחפשים?</p>${grp('mode', { swap: '🔄 החלפה', gift: '🎁 מתנה', sale: '🏷️ למכירה' })}
   <p class="label">סוג צמח</p>${grp('cat', CATS)}
   <p class="label">סוג החלפה</p>${grp('offer', OFFER)}
   <p class="label">מסירה</p>${grp('delivery', { pickup: 'איסוף', shipping: 'משלוח' })}
@@ -1295,7 +1390,9 @@ function meetSheet(mid) {
 function chatMenu(mid) {
   const m = S.matches.find(x => x.id === mid); if (!m) return;
   const n = otherInfo(m).name;
+  const mineHere = ((m.give || {})[uid()] || []).map(pid => S.myPlants.find(x => x.id === pid)).filter(Boolean);
   sheet(`<h3>${esc(n)}</h3>
+  ${mineHere.map(pl => `<button class="btn ${pl.frozen ? 'ghost' : 'sun'}" data-a="freezeToggle" data-id="${pl.id}">${pl.frozen ? `🔓 ביטול ההקפאה של ה${esc(pName(pl))}` : `🔒 להקפיא את ה${esc(pName(pl))} (שמור ל${esc(n)})`}</button>`).join('')}
   <button class="btn ghost" data-a="reportSheet" data-id="${mid}">דיווח על ${esc(n)}</button>
   <button class="btn ghost danger" data-a="block" data-id="${mid}">חסימת ${esc(n)}</button>
   <button class="btn ghost" data-a="closeSheet">סגירה</button>`);
@@ -1606,6 +1703,16 @@ function onIncomingCalls(sn) {
 }
 window.addEventListener('pagehide', () => { if (CALL.id) updateDoc(doc(db, 'calls', CALL.id), { status: 'ended', endedAt: Date.now() }).catch(() => { }); });
 
+// ---------- הקפאת מודעה ----------
+function setFrozen(pid, on) {
+  const pl = S.myPlants.find(x => x.id === pid); if (!pl) return;
+  pl.frozen = on;
+  const t = $('#sheet .toggle.freeze'); if (t) t.classList.toggle('on', on);
+  updateDoc(doc(db, 'plants', pid), { frozen: on })
+    .then(() => toast(on ? '🔒 המודעה הוקפאה. אף אחד חדש לא יפנה עליה.' : '🔓 המודעה פעילה שוב'))
+    .catch(e => { errLog(e); pl.frozen = !on; toast('השמירה לא הצליחה.'); });
+}
+
 // ---------- הודעות קוליות ----------
 let REC = null;
 const blobToDataURL = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(b); });
@@ -1717,7 +1824,16 @@ const A = {
     if (lastSwipe.a === 'save') S.priv.saved = S.priv.saved.filter(x => x !== lastSwipe.id);
     lastSwipe = null; savePriv(); renderDeck();
   },
-  refresh: async el => { busy(el, true, ''); try { await loadPool(true); } catch (e) { errLog(e); toast('הרענון לא הצליח.'); } VIEWS.discover(); },
+  refresh: async el => { busy(el, true, ''); try { await loadPool(true); } catch (e) { errLog(e); toast('הרענון לא הצליח.'); } (VIEWS[curRoute()[0]] || VIEWS.discover)(); },
+  searchMode: el => { SQ.mode = el.dataset.k; $$('.mchips .sel').forEach(b => b.classList.toggle('on', b === el)); renderResults(); },
+  clearSearch: () => { SQ.q = ''; VIEWS.discover(); },
+  searchFar: () => { S.profile.radius = 500; updateDoc(doc(db, 'users', uid()), { radius: 500 }).catch(errLog); VIEWS.discover(); },
+  wishFromSearch: async el => {
+    const c = toCat(SQ.q); if (!c) return;
+    busy(el, true);
+    try { await updateDoc(doc(db, 'users', uid()), { wishlist: arrayUnion(c.id) }); S.profile.wishlist = [...new Set([...(S.profile.wishlist || []), c.id])]; toast(`🔔 נודיע לך כשמישהו יעלה ${c.he}`); el.outerHTML = '<p class="small">✓ נוסף לרשימת המשאלות</p>'; }
+    catch (e) { errLog(e); busy(el, false); toast('לא הצליח. נסו שוב.'); }
+  },
   resetPasses: () => { Object.keys(S.priv.swipes).forEach(k => { if (S.priv.swipes[k] === 'pass') delete S.priv.swipes[k]; }); savePriv(); renderDeck(); },
   filters: filtersSheet,
   setFilter: el => { filters[el.dataset.k] = el.dataset.v; saveFilters(); filtersSheet(); },
@@ -1790,6 +1906,7 @@ const A = {
     } catch (e) { errLog(e); busy(el, false); $('#rate-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
   },
   chatMenu: el => chatMenu(el.dataset.id),
+  freezeToggle: el => { const pl = S.myPlants.find(x => x.id === el.dataset.id); if (!pl) return; setFrozen(pl.id, !pl.frozen); closeSheet(); },
   reportSheet: el => reportSheet(el.dataset.id),
   sendReport: async el => {
     const m = S.matches.find(x => x.id === el.dataset.id);
@@ -2003,8 +2120,9 @@ const A = {
     if (p[k] === v) return;
     const prev = p[k]; p[k] = v;
     $$(`#sheet [data-a=editPlant][data-k=${k}]`).forEach(b => b.classList.toggle('on', b === el));
+    if (k === 'mode' && (v === 'sale' || prev === 'sale')) setTimeout(() => myPlantSheet(p.id), 0);
     updateDoc(doc(db, 'plants', p.id), { [k]: v })
-      .then(() => toast(k === 'mode' ? `עודכן: ${MODE[v].i} ${MODE[v].t}` : 'עודכן ✓'))
+      .then(() => toast(k === 'mode' ? (v === 'sale' && !p.price ? 'עודכן ל🏷️ למכירה. כתבו מחיר.' : `עודכן: ${MODE[v].i} ${MODE[v].t}`) : 'עודכן ✓'))
       .catch(e => { errLog(e); p[k] = prev; toast('השמירה לא הצליחה. נסו שוב.'); myPlantSheet(p.id); });
   },
   editQty: el => {
@@ -2053,6 +2171,11 @@ document.addEventListener('change', async e => {
   if (k === 'chatImg' && el.files[0]) { try { sendMsg(el.dataset.id, '', await compress(el.files[0], 680, .7)); } catch (err) { toast('לא הצלחנו לשלוח את התמונה.'); } }
   if (k === 'avail') updateDoc(doc(db, 'plants', el.dataset.id), { available: el.checked }).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
   if (k === 'popen') updateDoc(doc(db, 'plants', el.dataset.id), { open: el.checked }).catch(errLog);
+  if (k === 'pfrozen') setFrozen(el.dataset.id, el.checked);
+  if (k === 'editPrice') {
+    const pl = S.myPlants.find(x => x.id === el.dataset.id); const v = Math.round(+el.value || 0);
+    if (pl && v > 0 && v !== pl.price) { pl.price = v; updateDoc(doc(db, 'plants', pl.id), { price: v }).then(() => toast(`המחיר עודכן: ₪${v}`)).catch(errLog); }
+  }
   if (k === 'liveLoc') {
     if (el.checked) { lsSet('ll_live', '1'); locate(true); }
     else { lsSet('ll_live', '0'); S.here = null; }
@@ -2066,7 +2189,7 @@ document.addEventListener('change', async e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.dataset && e.target.dataset.enter === 'send') { e.preventDefault(); A.send(e.target); }
   if (e.key === 'Escape') { closeSheet(); $('#overlay').classList.remove('open'); }
-  if (S.booted && curRoute()[0] === 'discover') {
+  if (S.booted && curRoute()[0] === 'swipe') {
     if (document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
     if (sheetOpen() || $('#overlay').classList.contains('open')) return;
     if (e.key === 'ArrowRight') decide('like');
@@ -2075,6 +2198,7 @@ document.addEventListener('keydown', e => {
   }
 });
 document.addEventListener('input', e => {
+  if (e.target.id === 'sq') { SQ.q = e.target.value; clearTimeout(SQ.t); SQ.t = setTimeout(renderResults, 120); return; }
   const er = e.target.closest('.pad, .ob, #sheet, #view'); if (er) $$('.err', er).forEach(x => { x.textContent = ''; });
   const t = e.target;
   if (t.dataset && t.dataset.suggest) {
