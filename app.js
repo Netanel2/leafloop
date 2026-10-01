@@ -557,6 +557,7 @@ function listen() {
   const me = uid();
   subs.push(onSnapshot(query(collection(db, 'plants'), where('ownerId', '==', me)), s => {
     S.myPlants = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.t || 0) - (a.t || 0));
+    fixStuckPlants();
     live(['profile']);
   }, errLog));
 
@@ -573,14 +574,15 @@ function listen() {
         else if (prev !== undefined && (m.lastAt || 0) > prev && m.lastFrom && m.lastFrom !== me && !viewing) toast(`💬 ${otherInfo(m).name}: ${m.lastMsg || ''}`);
       }
       seen[m.id] = m.lastAt || 0;
-      if (m.status === 'swapped') ((m.give || {})[me] || []).forEach(pid => {
-        const x = S.myPlants.find(p => p.id === pid);
-        if (x && x.available) updateDoc(doc(db, 'plants', pid), { available: false }).catch(errLog);
+      ((m.give || {})[me] || []).forEach(pid => {
+        const x = S.myPlants.find(p => p.id === pid); if (!x) return;
+        if (m.status === 'swapped' && x.available) updateDoc(doc(db, 'plants', pid), { available: false, swappedIn: m.id }).catch(errLog);
+        else if (m.status !== 'swapped' && !x.available && x.swappedIn === m.id) updateDoc(doc(db, 'plants', pid), { available: true, swappedIn: null }).then(() => toast(`ה${pName(x)} חזר/ה להיות זמין/ה לאחרים`)).catch(errLog);
       });
     });
     first = false;
     S.matches = list.sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
-    syncStats();
+    syncStats(); fixStuckPlants();
     live(['matches', 'profile']);
     if (curRoute()[0] === 'chat') updateChatMeta();
     refreshBadges();
@@ -605,6 +607,18 @@ function listen() {
       updateDoc(doc(db, 'requests', r.id), { seen: true }).catch(errLog);
     });
   }, errLog));
+}
+// צמחים שהוסתרו בגלל החלפה שבוטלה אחר כך (גם מגרסאות קודמות)
+let fixedStuck = false;
+function fixStuckPlants() {
+  if (fixedStuck || !S.matches.length || !S.myPlants.length) return;
+  fixedStuck = true;
+  const me = uid();
+  S.myPlants.filter(p => !p.available && !p.swappedIn).forEach(p => {
+    const ms = S.matches.filter(m => ((m.give || {})[me] || []).includes(p.id));
+    if (ms.length && !ms.some(m => m.status === 'swapped') && ms.some(m => m.status === 'cancelled'))
+      updateDoc(doc(db, 'plants', p.id), { available: true, swappedIn: null }).then(() => toast(`ה${pName(p)} חזר/ה להיות זמין/ה לאחרים`)).catch(errLog);
+  });
 }
 function syncStats() {
   const me = uid();
@@ -692,6 +706,7 @@ function renderResults() {
       : `<p>הזמינו חברים שאוהבים צמחים, וככל שיהיו יותר אנשים יהיו יותר צמחים.</p><button class="btn hot sm" data-a="invite" style="margin:auto">${ic('share', 16)} הזמנת חברים</button>`}</div>`;
 }
 VIEWS.discover = function () {
+  if (Date.now() - S.poolAt > 45000) loadPool(true).then(() => { if (curRoute()[0] === 'discover') renderResults(); }).catch(errLog);
   const R = S.profile.radius;
   const n = notifList().filter(x => x.unread).length;
   const canLive = !S.here && liveOn() && !!navigator.geolocation;
@@ -1262,7 +1277,8 @@ async function setStatus(mid, s) {
     await updateDoc(doc(db, 'matches', mid), { status: s });
     await sendMsg(mid, `הסטטוס עודכן: ${STATUS[s]}`, null, true);
     if (s === 'swapped') {
-      ((m.give || {})[uid()] || []).forEach(pid => updateDoc(doc(db, 'plants', pid), { available: false }).catch(errLog));
+      ((m.give || {})[uid()] || []).forEach(pid => updateDoc(doc(db, 'plants', pid), { available: false, swappedIn: mid }).catch(errLog));
+      toast('ההחלפה סומנה כבוצעה. הצמח שלך הוסתר מהחיפוש.');
       setTimeout(() => rateSheet(mid), 500);
     }
   } catch (e) { errLog(e); toast('העדכון לא הצליח. נסו שוב.'); }
@@ -1295,7 +1311,8 @@ VIEWS.profile = function () {
     ${avatar(u)}<h1>${esc(u.name)}</h1><div>${icInline('pin')} ${esc(u.city)}</div></header>
   <div class="stats"><div class="stat"><b>${u.swaps || 0}</b><span>החלפות</span></div><div class="stat"><b>${u.rehomed || 0}</b><span>צמחים שמצאו בית</span></div><div class="stat"><b>${u.ratingCount ? Number(u.ratingAvg).toFixed(1) : '–'}</b><span>${u.ratingCount ? `דירוג (${u.ratingCount})` : 'עוד אין דירוג'}</span></div></div>
   <h2 class="section-t">הצמחים שלי</h2>
-  ${S.myPlants.length ? `<div class="grid">${S.myPlants.map(p => `<button class="mini ${p.available ? '' : 'off'}" data-a="myPlantSheet" data-id="${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}${p.available ? '' : ', לא זמין'}</div></div></button>`).join('')}</div>`
+  ${S.myPlants.length ? `<div class="grid">${S.myPlants.map(p => `<button class="mini ${p.available ? '' : 'off'}" data-a="myPlantSheet" data-id="${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${p.available ? OFFER[p.offer] + (p.qty > 1 ? ' ×' + p.qty : '') : '👁️‍🗨️ מוסתר מהחיפוש'}</div></div></button>`).join('')}</div>
+  ${S.myPlants.some(p => !p.available) ? `<p class="small muted" style="padding:8px 18px 0">צמח מוסתר לא מופיע לאחרים. לוחצים עליו ומדליקים "זמין" כדי להחזיר אותו.</p>` : ''}`
       : `<div class="empty"><p>עוד לא הוספתם צמחים.</p><button class="btn hot sm" data-a="open" data-to="add" style="margin:auto">הוספת צמח</button></div>`}
   <h2 class="section-t">רשימת המשאלות</h2>
   <div class="addwish"><input class="field" id="wish-in" data-suggest="wish" placeholder="איזה צמח אתם מחפשים?" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWish">הוספה</button></div>
@@ -1338,6 +1355,7 @@ function settingsSheet() {
   <button class="btn primary" data-a="saveSettings" style="margin-top:14px">שמירה</button>
   ${deferredInstall ? `<button class="btn sun" data-a="install">${ic('download')} התקנת האפליקציה בטלפון</button>` : ''}
   ${isIOS && !isStandalone ? `<div class="note" style="margin-top:14px">${ic('download', 20)}<span><b>להתקנה באייפון:</b> בספארי לוחצים על סמל השיתוף ואז "הוספה למסך הבית".</span></div>` : ''}
+  ${(S.priv.blocked || []).length ? `<p class="label">משתמשים חסומים</p>${S.priv.blocked.map(id => { const m = S.matches.find(x => x.users.includes(id)); const nm = (m && m.info && m.info[id] && m.info[id].name) || (S.users[id] && S.users[id].name) || 'משתמש/ת'; return `<div class="rate-row"><b>${esc(nm)}</b><button class="btn ghost sm" data-a="unblock" data-id="${esc(id)}">ביטול חסימה</button></div>`; }).join('')}` : ''}
   <button class="btn ghost" data-a="signOut">${ic('logout')} התנתקות</button>
   <p class="small center" style="margin-top:16px"><a href="privacy.html">מדיניות פרטיות</a></p>
   <button class="btn ghost danger" data-a="deleteAccount">${ic('trash')} מחיקת החשבון</button>`);
@@ -1906,6 +1924,7 @@ const A = {
     } catch (e) { errLog(e); busy(el, false); $('#rate-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
   },
   chatMenu: el => chatMenu(el.dataset.id),
+  unblock: el => { S.priv.blocked = (S.priv.blocked || []).filter(x => x !== el.dataset.id); savePriv(); toast('החסימה בוטלה'); settingsSheet(); },
   freezeToggle: el => { const pl = S.myPlants.find(x => x.id === el.dataset.id); if (!pl) return; setFrozen(pl.id, !pl.frozen); closeSheet(); },
   reportSheet: el => reportSheet(el.dataset.id),
   sendReport: async el => {
