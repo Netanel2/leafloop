@@ -450,3 +450,36 @@ input,textarea,select{font-size:16px}
 }
 .ask-art{background:#DDF7C2}
 .sugg button.typed{border-style:dashed;border-color:var(--leaf);color:var(--jungle)}
+
+/* ===== שיחות קוליות ===== */
+.call-btn{background:#DDF7C2;color:var(--jungle)}
+.callscreen{position:fixed;inset:0;z-index:90;background:linear-gradient(180deg,#073B2A 0%,#0E5A3F 60%,#19A55B 130%);color:#fff;display:flex;flex-direction:column;justify-content:space-between;align-items:center;padding:calc(60px + env(safe-area-inset-top)) 24px calc(48px + env(safe-area-inset-bottom));text-align:center}
+.call-top{display:flex;flex-direction:column;align-items:center;gap:10px}
+.call-ring{border-radius:44px;padding:8px}
+.callscreen.incoming .call-ring,.callscreen.outgoing .call-ring{animation:ringpulse 1.6s ease-out infinite}
+@keyframes ringpulse{0%{box-shadow:0 0 0 0 rgba(184,230,46,.55)}100%{box-shadow:0 0 0 34px rgba(184,230,46,0)}}
+.call-av{width:120px!important;height:120px!important;border-radius:40px!important;font-size:48px!important;margin:0!important;border:4px solid #fff}
+.callscreen h2{font-size:30px;font-weight:900;margin-top:8px}
+#call-status{font-size:17px;opacity:.9;margin:0;min-height:24px;font-variant-numeric:tabular-nums}
+.call-note{opacity:.7;display:flex;align-items:center;gap:4px}
+.call-btns{display:flex;gap:44px;justify-content:center;min-height:76px}
+.cbtn{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;color:#fff}
+.cbtn.accept{background:#19C26A;animation:pop .4s both}
+.cbtn.decline{background:#E5383B}
+.cbtn.decline .ic{transform:rotate(0)}
+.cbtn.mute{background:rgba(255,255,255,.16)}
+.cbtn.mute.on{background:#fff;color:var(--jungle)}
+
+/* ===== הודעות קוליות ===== */
+.mic-btn{flex:none}
+.voice{display:flex;align-items:center;gap:10px;min-width:170px}
+.vplay{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.25);flex:none;color:inherit}
+.msg.them .vplay{background:var(--bg)}
+.vbar{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.35);overflow:hidden;position:relative}
+.msg.them .vbar{background:var(--line)}
+.vbar i{position:absolute;top:0;bottom:0;inset-inline-start:0;width:0;background:currentColor;transition:width .2s linear}
+.vdur{font-size:12px;font-variant-numeric:tabular-nums;opacity:.85}
+.rec-live{flex:1;display:flex;align-items:center;gap:10px;padding:0 6px}
+.rec-dot{width:12px;height:12px;border-radius:50%;background:#E5383B;animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.25}}
+#rec-time{font-weight:700;font-variant-numeric:tabular-nums}

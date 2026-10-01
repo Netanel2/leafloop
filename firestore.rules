@@ -93,6 +93,20 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // שיחות קוליות: רק שני המשתתפים. אפשר להתקשר רק למי שיש איתו התאמה.
+    match /calls/{id} {
+      allow read: if signed() && (resource.data.from == me() || resource.data.to == me());
+      allow create: if signed() && request.resource.data.from == me()
+        && me() in matchUsers(request.resource.data.matchId)
+        && request.resource.data.to in matchUsers(request.resource.data.matchId);
+      allow update: if signed() && (resource.data.from == me() || resource.data.to == me())
+        && request.resource.data.from == resource.data.from && request.resource.data.to == resource.data.to;
+      match /cands/{cid} {
+        allow read, create: if signed() && (get(/databases/$(database)/documents/calls/$(id)).data.from == me()
+          || get(/databases/$(database)/documents/calls/$(id)).data.to == me());
+      }
+    }
+
     // דיווחים: אפשר רק לשלוח
     match /reports/{id} {
       allow create: if signed() && request.resource.data.from == me();

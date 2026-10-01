@@ -43,7 +43,13 @@ const ICONS = {
   dots: 'M5 12h.01M12 12h.01M19 12h.01',
   logout: 'M14 8V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2M9 12h12l-3-3M18 15l3-3',
   settings: 'M10.3 4.3c.4-1.8 3-1.8 3.4 0a1.7 1.7 0 0 0 2.6 1.1c1.5-.9 3.3.8 2.4 2.4a1.7 1.7 0 0 0 1 2.5c1.8.5 1.8 3 0 3.5a1.7 1.7 0 0 0-1 2.6c.9 1.5-.9 3.3-2.4 2.4a1.7 1.7 0 0 0-2.6 1c-.4 1.8-3 1.8-3.4 0a1.7 1.7 0 0 0-2.6-1c-1.5.9-3.3-.9-2.4-2.4a1.7 1.7 0 0 0-1-2.6c-1.8-.4-1.8-3 0-3.4a1.7 1.7 0 0 0 1-2.6c-.9-1.5.9-3.3 2.4-2.4a1.7 1.7 0 0 0 2.6-1.1M9 12a3 3 0 1 0 6 0a3 3 0 0 0-6 0',
-  download: 'M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5 5-5M12 4v12'
+  download: 'M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 11l5 5 5-5M12 4v12',
+  phone: 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2',
+  phoneOff: 'M3 21 21 3M5.1 18.9A16 16 0 0 1 3 6a2 2 0 0 1 2-2h4l2 5-2.5 1.5c.4.8.9 1.5 1.5 2.2M14.3 14.3c.4.3.8.5 1.2.7L15 13l5 2v4a2 2 0 0 1-2 2c-3 0-5.9-1-8.2-2.6',
+  mic: 'M9 5a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0zM5 10a7 7 0 0 0 14 0M8 21h8M12 17v4',
+  micOff: 'M3 3l18 18M9 5a3 3 0 0 1 6 0v5c0 .3 0 .6-.1.9M15 15a3 3 0 0 1-6-1.5V11M5 10a7 7 0 0 0 10.6 6M19 10a7 7 0 0 1-.7 3M8 21h8M12 17v4',
+  play: 'M7 4v16l13-8z',
+  pause: 'M6 5h4v14H6zM14 5h4v14h-4z'
 };
 const ic = (n, s = 22) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICONS[n]}"/></svg>`;
 const icInline = (n, s = 16) => ic(n, s).replace('class="ic"', 'class="ic" style="display:inline;vertical-align:-3px"');
@@ -359,6 +365,8 @@ function route() {
   closeSheet();
   if (chatUnsub) { chatUnsub(); chatUnsub = null; }
   if (mapObj) { mapObj.remove(); mapObj = null; }
+  if (REC) stopRec(true);
+  if (player) { player.pause(); player = null; playingId = null; }
   let full = true;
   if (!cfgOk) renderSetup();
   else if (S.me === null && !S.authKnown) renderLoading(redirecting() ? 'מסיימים להתחבר…' : '');
@@ -514,6 +522,7 @@ async function startSession() {
   autoLocate();
   await loadMyNursery();
   try { await loadPool(true); } catch (e) { errLog(e); toast('לא הצלחנו לטעון צמחים. בדקו את החיבור לאינטרנט.'); }
+  await Promise.race([S.matchesReady, new Promise(r => setTimeout(r, 4000))]);
   S.booted = true;
   updateDoc(doc(db, 'users', uid()), { lastSeen: Date.now() }).catch(errLog);
 }
@@ -549,7 +558,9 @@ function listen() {
   }, errLog));
 
   let first = true; const seen = {};
+  let gotMatches; S.matchesReady = new Promise(r => { gotMatches = r; });
   subs.push(onSnapshot(query(collection(db, 'matches'), where('users', 'array-contains', me)), s => {
+    gotMatches();
     const list = s.docs.map(d => ({ id: d.id, ...d.data() }));
     list.forEach(m => {
       const prev = seen[m.id];
@@ -572,6 +583,7 @@ function listen() {
     refreshBadges();
   }, errLog));
 
+  subs.push(onSnapshot(query(collection(db, 'calls'), where('to', '==', me), where('status', '==', 'ringing')), onIncomingCalls, errLog));
   let firstIn = true;
   subs.push(onSnapshot(query(collection(db, 'requests'), where('to', '==', me)), s => {
     const prevIds = S.incoming.map(r => r.id);
@@ -1088,14 +1100,12 @@ VIEWS.chat = function (id) {
     <header class="chat-h"><button class="icon-btn" data-a="open" data-to="matches" aria-label="חזרה">${ic('back')}</button>${avatar(info)}
       <div style="flex:1;min-width:0"><b>${esc(info.name)}</b><div class="small muted">${esc(info.city || '')}</div></div>
       <button class="pill st-${m.status}" id="chat-status" data-a="statusSheet" data-id="${m.id}">${STATUS[m.status]} ▾</button>
+      ${m.status !== 'cancelled' && !isBlocked(otherId(m)) ? `<button class="icon-btn call-btn" data-a="call" data-id="${m.id}" aria-label="שיחה קולית">${ic('phone', 20)}</button>` : ''}
       <button class="icon-btn" data-a="chatMenu" data-id="${m.id}" aria-label="עוד אפשרויות">${ic('dots')}</button></header>
     <div class="swapbar" id="swapbar"></div>
     <div class="msgs" id="msgs"><div class="loading" style="min-height:120px"><span class="spin"></span></div></div>
     ${done ? (m.status === 'swapped' && !(m.rated || []).includes(uid()) ? `<div class="quick"><button class="sel on" data-a="rate" data-id="${m.id}">⭐ דירוג ההחלפה</button></div>` : '') : `<div class="quick">${QUICK.map(q => `<button class="sel" data-a="quick" data-id="${m.id}" data-t="${esc(q)}">${esc(q)}</button>`).join('')}<button class="sel" data-a="meetSheet" data-id="${m.id}">${icInline('pin', 14)} קביעת מפגש</button></div>`}
-    <div class="composer">
-      <label class="icon-btn" for="chat-img" aria-label="שליחת תמונה">${ic('image')}</label><input type="file" id="chat-img" accept="image/*" class="sr" data-change="chatImg" data-id="${m.id}">
-      <input class="field" id="chat-in" placeholder="כתבו הודעה" autocomplete="off" maxlength="1000" data-enter="send" data-id="${m.id}">
-      <button class="send" data-a="send" data-id="${m.id}" aria-label="שליחה">${ic('send')}</button></div>
+    <div class="composer" id="composer">${composerHTML(m.id)}</div>
   </div>`;
   renderSwapbar(m);
   S.msgs = [];
@@ -1121,12 +1131,24 @@ function updateChatMeta() {
   if (st && !st.classList.contains('st-' + m.status)) { VIEWS.chat(id); return; }
   renderSwapbar(m);
 }
+function composerHTML(mid) {
+  return `<label class="icon-btn" for="chat-img" aria-label="שליחת תמונה">${ic('image')}</label><input type="file" id="chat-img" accept="image/*" class="sr" data-change="chatImg" data-id="${mid}">
+      <input class="field" id="chat-in" placeholder="כתבו הודעה" autocomplete="off" maxlength="1000" data-enter="send" data-id="${mid}">
+      <button class="icon-btn mic-btn" data-a="recStart" data-id="${mid}" aria-label="הקלטת הודעה קולית">${ic('mic', 22)}</button>
+      <button class="send" data-a="send" data-id="${mid}" aria-label="שליחה">${ic('send')}</button>`;
+}
+const fmtDur = sec => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+function msgBody(x) {
+  if (x.audio) return `<div class="voice"><button class="vplay" data-a="vplay" data-id="${x.id}" aria-label="ניגון">${ic('play', 18)}</button><span class="vbar"><i id="vb-${x.id}"></i></span><span class="vdur">${fmtDur(x.dur || 0)}</span></div>`;
+  if (x.img) return `<img src="${x.img}" alt="תמונה">`;
+  return esc(x.text);
+}
 function renderMsgs(m) {
   const box = $('#msgs'); if (!box) return;
   const me = uid();
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   box.innerHTML = S.msgs.map(x => x.sys ? `<div class="msg sys">${esc(x.text)}</div>` :
-    `<div class="msg ${x.from === me ? 'me' : 'them'}">${x.img ? `<img src="${x.img}" alt="תמונה">` : esc(x.text)}<time>${new Date(x.t).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</time></div>`).join('') || '<div class="msg sys">תגידו שלום 👋</div>';
+    `<div class="msg ${x.from === me ? 'me' : 'them'}${x.audio ? ' has-voice' : ''}">${msgBody(x)}<time>${new Date(x.t).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</time></div>`).join('') || '<div class="msg sys">תגידו שלום 👋</div>';
   if (nearBottom || box.dataset.first !== '1') { box.scrollTop = box.scrollHeight; box.dataset.first = '1'; }
 }
 async function sendMsg(mid, text, img, sys) {
@@ -1413,12 +1435,238 @@ async function createNursery(d) {
 }
 
 // =====================================================
+// שיחות קוליות בתוך האפליקציה (WebRTC) והודעות קוליות
+// =====================================================
+const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+let iceCache = null;
+async function getIce() {
+  if (iceCache && Date.now() - iceCache.t < 3000e3) return iceCache.servers;
+  let extra = [];
+  try {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3500);
+    const r = await fetch('/api/turn', { signal: ctl.signal, cache: 'no-store' }); clearTimeout(tm);
+    if (r.ok) { const d = await r.json(); const x = d.iceServers; extra = Array.isArray(x) ? x : (x ? [x] : []); }
+  } catch (e) { }
+  iceCache = { t: Date.now(), servers: [...STUN, ...extra] };
+  return iceCache.servers;
+}
+// צלילים (נוצרים בדפדפן, בלי קבצים)
+let actx = null;
+document.addEventListener('pointerdown', () => {
+  try { if (!actx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) actx = new AC(); } if (actx && actx.state === 'suspended') actx.resume(); } catch (e) { }
+}, { passive: true });
+function tone(pattern, every) {
+  if (!actx) return () => { };
+  let stopped = false;
+  const beep = () => {
+    if (stopped) return;
+    pattern.forEach(([f, st, du]) => {
+      try {
+        const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = f; o.connect(g); g.connect(actx.destination);
+        const t = actx.currentTime + st; g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.14, t + .02); g.gain.setValueAtTime(.14, t + du - .03); g.gain.linearRampToValueAtTime(0, t + du);
+        o.start(t); o.stop(t + du + .05);
+      } catch (e) { }
+    });
+  };
+  beep(); const iv = setInterval(beep, every);
+  return () => { stopped = true; clearInterval(iv); };
+}
+const RING = [[880, 0, .3], [660, .38, .3], [880, .9, .3], [660, 1.28, .3]], RINGBACK = [[425, 0, 1.1]];
+const CALL = { id: null, pc: null, stream: null, role: null, unsubs: [], other: null, matchId: null, started: 0, muted: false, incoming: null, pending: [], remoteQ: [], ready: false, ringStop: null, vib: null, ringT: null, tickT: null, audio: null };
+function stopRing() { if (CALL.ringStop) { CALL.ringStop(); CALL.ringStop = null; } if (CALL.vib) { clearInterval(CALL.vib); CALL.vib = null; } try { navigator.vibrate && navigator.vibrate(0); } catch (e) { } }
+function callUI(state, sub) {
+  let el = $('#callscreen');
+  if (!el) { el = document.createElement('div'); el.id = 'callscreen'; document.body.appendChild(el); }
+  const o = CALL.other || {};
+  el.className = 'callscreen ' + state;
+  el.innerHTML = `<div class="call-top"><div class="call-ring">${avatar(o, 'av call-av')}</div><h2>${esc(o.name || '')}</h2><p id="call-status">${esc(sub || '')}</p><p class="small call-note">${ic('shield', 14)} שיחה דרך LeafLoop, בלי מספרי טלפון</p></div>
+  <div class="call-btns">${state === 'incoming'
+    ? `<button class="cbtn decline" data-a="callDecline" aria-label="דחייה">${ic('phoneOff', 30)}</button><button class="cbtn accept" data-a="callAccept" aria-label="מענה">${ic('phone', 30)}</button>`
+    : `<button class="cbtn mute ${CALL.muted ? 'on' : ''}" data-a="callMute" aria-label="${CALL.muted ? 'ביטול השתקה' : 'השתקה'}">${ic(CALL.muted ? 'micOff' : 'mic', 26)}</button><button class="cbtn decline" data-a="callHang" aria-label="ניתוק">${ic('phoneOff', 30)}</button>`}</div>`;
+}
+const setCallStatus = t => { const e = $('#call-status'); if (e) e.textContent = t; };
+const hideCallUI = () => { const e = $('#callscreen'); if (e) e.remove(); };
+async function makePC() {
+  const pc = new RTCPeerConnection({ iceServers: await getIce() });
+  CALL.pc = pc;
+  CALL.stream.getTracks().forEach(t => pc.addTrack(t, CALL.stream));
+  pc.onicecandidate = e => {
+    if (!e.candidate) return;
+    const j = e.candidate.toJSON();
+    const c = { candidate: j.candidate || '', sdpMid: j.sdpMid ?? null, sdpMLineIndex: j.sdpMLineIndex ?? null, side: CALL.role === 'caller' ? 'from' : 'to', t: Date.now() };
+    if (CALL.ready) addDoc(collection(db, 'calls', CALL.id, 'cands'), c).catch(errLog); else CALL.pending.push(c);
+  };
+  pc.ontrack = e => {
+    if (!CALL.audio) { const a = document.createElement('audio'); a.autoplay = true; a.setAttribute('playsinline', ''); document.body.appendChild(a); CALL.audio = a; }
+    CALL.audio.srcObject = e.streams[0]; CALL.audio.play().catch(() => { });
+  };
+  pc.onconnectionstatechange = () => {
+    const st = pc.connectionState;
+    if (st === 'connected' && !CALL.started) {
+      CALL.started = Date.now(); stopRing(); clearTimeout(CALL.ringT);
+      CALL.tickT = setInterval(() => setCallStatus(fmtDur((Date.now() - CALL.started) / 1000)), 1000); setCallStatus('0:00');
+    }
+    if (st === 'failed') finishCall(true, 'השיחה לא התחברה. נסו שוב, או שלחו הודעה קולית.');
+    if (st === 'disconnected' && CALL.started) setCallStatus('החיבור חלש…');
+  };
+  return pc;
+}
+function flushPending() { CALL.ready = true; CALL.pending.forEach(c => addDoc(collection(db, 'calls', CALL.id, 'cands'), c).catch(errLog)); CALL.pending = []; }
+function flushRemote() { const q = CALL.remoteQ; CALL.remoteQ = []; q.forEach(c => CALL.pc.addIceCandidate(c).catch(errLog)); }
+function listenCands(id, side) {
+  const seen = new Set();
+  CALL.unsubs.push(onSnapshot(query(collection(db, 'calls', id, 'cands'), where('side', '==', side)), sn => {
+    sn.docs.forEach(d => {
+      if (seen.has(d.id)) return; seen.add(d.id);
+      const x = d.data(); const c = { candidate: x.candidate, sdpMid: x.sdpMid, sdpMLineIndex: x.sdpMLineIndex };
+      if (CALL.pc && CALL.pc.remoteDescription) CALL.pc.addIceCandidate(c).catch(errLog); else CALL.remoteQ.push(c);
+    });
+  }, errLog));
+}
+async function getMic() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('nomic');
+  return navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+}
+async function startCall(mid) {
+  if (CALL.id || CALL.incoming) return toast('כבר יש שיחה פעילה.');
+  const m = S.matches.find(x => x.id === mid); if (!m) return;
+  if (!window.RTCPeerConnection) return toast('הדפדפן הזה לא תומך בשיחות. נסו לעדכן אותו.');
+  CALL.other = { ...otherInfo(m), id: otherId(m) }; CALL.matchId = mid; CALL.role = 'caller';
+  callUI('outgoing', 'מתחברים…');
+  try { CALL.stream = await getMic(); } catch (e) { resetCall(); hideCallUI(); return toast('צריך לאשר גישה למיקרופון כדי להתקשר.'); }
+  try {
+    const ref = doc(collection(db, 'calls')); CALL.id = ref.id;
+    const pc = await makePC();
+    const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
+    await setDoc(ref, { matchId: mid, from: uid(), to: CALL.other.id, fromInfo: pubInfo(S.profile), status: 'ringing', offer: { type: offer.type, sdp: offer.sdp }, answer: null, t: Date.now() });
+    flushPending();
+    setCallStatus('מצלצל…'); CALL.ringStop = tone(RINGBACK, 3500);
+    CALL.unsubs.push(onSnapshot(ref, sn => {
+      const d = sn.data(); if (!d || !CALL.pc) return;
+      if (d.answer && !CALL.pc.remoteDescription) { CALL.pc.setRemoteDescription(d.answer).then(flushRemote).catch(errLog); stopRing(); setCallStatus('מתחברים…'); }
+      if (['ended', 'declined', 'busy'].includes(d.status)) finishCall(false, d.status === 'declined' ? 'השיחה נדחתה' : d.status === 'busy' ? 'הצד השני בשיחה אחרת' : 'השיחה הסתיימה');
+    }, errLog));
+    listenCands(ref.id, 'to');
+    CALL.ringT = setTimeout(() => {
+      if (CALL.id === ref.id && !CALL.started && !(CALL.pc && CALL.pc.remoteDescription)) { updateDoc(ref, { status: 'missed' }).catch(errLog); logCall(mid, 0); finishCall(false, 'אין מענה'); }
+    }, 45000);
+  } catch (e) { errLog(e); finishCall(true, 'לא הצלחנו להתקשר. נסו שוב.'); }
+}
+async function acceptCall() {
+  const c = CALL.incoming; if (!c) return;
+  stopRing();
+  CALL.id = c.id; CALL.role = 'callee'; CALL.matchId = c.matchId; CALL.incoming = null;
+  callUI('active', 'מתחברים…');
+  try { CALL.stream = await getMic(); } catch (e) { updateDoc(doc(db, 'calls', c.id), { status: 'declined' }).catch(errLog); finishCall(false, 'צריך לאשר גישה למיקרופון כדי לענות.'); return; }
+  try {
+    const pc = await makePC(); CALL.ready = true;
+    await pc.setRemoteDescription(c.offer); flushRemote();
+    const ans = await pc.createAnswer(); await pc.setLocalDescription(ans);
+    await updateDoc(doc(db, 'calls', c.id), { answer: { type: ans.type, sdp: ans.sdp }, status: 'accepted', acceptedAt: Date.now() });
+    listenCands(c.id, 'from');
+    CALL.unsubs.push(onSnapshot(doc(db, 'calls', c.id), sn => { const d = sn.data(); if (d && ['ended', 'missed'].includes(d.status)) finishCall(false, 'השיחה הסתיימה'); }, errLog));
+  } catch (e) { errLog(e); finishCall(true, 'השיחה לא התחברה.'); }
+}
+function declineCall() {
+  const c = CALL.incoming; if (!c) return;
+  stopRing(); CALL.incoming = null; CALL.other = null; hideCallUI();
+  updateDoc(doc(db, 'calls', c.id), { status: 'declined' }).catch(errLog);
+}
+function logCall(mid, dur) { sendMsg(mid, dur ? `📞 שיחה קולית, ${fmtDur(dur)}` : '📞 שיחה שלא נענתה', null, true); }
+function resetCall() {
+  CALL.unsubs.forEach(f => { try { f(); } catch (e) { } });
+  Object.assign(CALL, { id: null, pc: null, stream: null, role: null, unsubs: [], other: null, matchId: null, started: 0, muted: false, incoming: null, pending: [], remoteQ: [], ready: false });
+}
+function finishCall(notify, msg) {
+  const id = CALL.id, mid = CALL.matchId, caller = CALL.role === 'caller';
+  const dur = CALL.started ? Math.round((Date.now() - CALL.started) / 1000) : 0;
+  if (!id && !CALL.stream) { hideCallUI(); return; }
+  stopRing(); clearTimeout(CALL.ringT); clearInterval(CALL.tickT);
+  if (notify && id) updateDoc(doc(db, 'calls', id), { status: 'ended', endedAt: Date.now(), dur }).catch(errLog);
+  if (caller && dur > 0) logCall(mid, dur);
+  try { CALL.pc && CALL.pc.close(); } catch (e) { }
+  try { CALL.stream && CALL.stream.getTracks().forEach(t => t.stop()); } catch (e) { }
+  if (CALL.audio) { CALL.audio.srcObject = null; CALL.audio.remove(); CALL.audio = null; }
+  resetCall();
+  if (msg && $('#callscreen')) { setCallStatus(msg); const b = $('#callscreen .call-btns'); if (b) b.innerHTML = ''; setTimeout(hideCallUI, 1600); } else hideCallUI();
+}
+function onIncomingCalls(sn) {
+  const now = Date.now();
+  const ringing = sn.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => now - (c.t || 0) < 45000 && !isBlocked(c.from));
+  if (CALL.incoming && !ringing.some(c => c.id === CALL.incoming.id)) { stopRing(); CALL.incoming = null; CALL.other = null; hideCallUI(); toast('📞 שיחה שלא נענתה'); }
+  const c = ringing[0];
+  if (!c) return;
+  if (CALL.id && c.id !== CALL.id) { updateDoc(doc(db, 'calls', c.id), { status: 'busy' }).catch(errLog); return; }
+  if (!CALL.incoming && !CALL.id) {
+    CALL.incoming = c; CALL.other = { ...(c.fromInfo || {}), id: c.from };
+    callUI('incoming', 'שיחה קולית נכנסת…');
+    CALL.ringStop = tone(RING, 2600);
+    if (navigator.vibrate) { navigator.vibrate([500, 300, 500]); CALL.vib = setInterval(() => navigator.vibrate([500, 300, 500]), 2600); }
+  }
+}
+window.addEventListener('pagehide', () => { if (CALL.id) updateDoc(doc(db, 'calls', CALL.id), { status: 'ended', endedAt: Date.now() }).catch(() => { }); });
+
+// ---------- הודעות קוליות ----------
+let REC = null;
+const blobToDataURL = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(b); });
+async function startRec(mid) {
+  if (REC) return;
+  if (!window.MediaRecorder) return toast('הדפדפן הזה לא תומך בהקלטה.');
+  let stream;
+  try { stream = await getMic(); } catch (e) { return toast('צריך לאשר גישה למיקרופון כדי להקליט.'); }
+  const types = ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
+  const mime = types.find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+  let rec;
+  try { rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : { audioBitsPerSecond: 32000 }); }
+  catch (e) { stream.getTracks().forEach(t => t.stop()); return toast('ההקלטה לא נתמכת במכשיר הזה.'); }
+  REC = { rec, stream, chunks: [], mid, start: Date.now(), cancel: false, mime: rec.mimeType || mime || 'audio/mp4' };
+  rec.ondataavailable = e => { if (e.data && e.data.size && REC) REC.chunks.push(e.data); };
+  rec.onstop = async () => {
+    const r = REC; REC = null; clearInterval(r.iv);
+    r.stream.getTracks().forEach(t => t.stop());
+    const box = $('#composer'); if (box) box.innerHTML = composerHTML(r.mid);
+    if (r.cancel) return;
+    const dur = Math.round((Date.now() - r.start) / 1000);
+    if (dur < 1) return toast('ההקלטה קצרה מדי. לוחצים, מדברים, ואז שולחים.');
+    const blob = new Blob(r.chunks, { type: r.mime });
+    if (blob.size > 700000) return toast('ההקלטה ארוכה מדי.');
+    try { await sendVoice(r.mid, await blobToDataURL(blob), dur); } catch (e) { errLog(e); toast('ההודעה הקולית לא נשלחה.'); }
+  };
+  rec.start(250);
+  const box = $('#composer');
+  if (box) box.innerHTML = `<button class="icon-btn" data-a="recCancel" aria-label="ביטול ההקלטה">${ic('trash', 20)}</button><div class="rec-live"><span class="rec-dot"></span><span id="rec-time">0:00</span><span class="small muted">מקליטים… (עד דקה)</span></div><button class="send" data-a="recSend" aria-label="שליחת ההקלטה">${ic('send')}</button>`;
+  REC.iv = setInterval(() => { if (!REC) return; const sec = (Date.now() - REC.start) / 1000; const e = $('#rec-time'); if (e) e.textContent = fmtDur(sec); if (sec >= 60) stopRec(false); }, 250);
+}
+function stopRec(cancel) { if (!REC) return; REC.cancel = cancel; try { REC.rec.stop(); } catch (e) { } }
+async function sendVoice(mid, url, dur) {
+  const m = S.matches.find(x => x.id === mid); if (!m) return;
+  const me = uid(), o = otherId(m), now = Date.now();
+  await addDoc(collection(db, 'matches', mid, 'messages'), { from: me, text: '', img: null, audio: url, dur, sys: false, t: now });
+  await updateDoc(doc(db, 'matches', mid), { lastMsg: '🎙️ הודעה קולית', lastAt: now, lastFrom: me, [`unread.${o}`]: increment(1) });
+}
+let player = null, playingId = null;
+function playVoice(id) {
+  const x = S.msgs.find(y => y.id === id); if (!x || !x.audio) return;
+  const btns = () => $$('[data-a=vplay]');
+  if (playingId === id && player && !player.paused) { player.pause(); return; }
+  if (player) { player.pause(); }
+  player = new Audio(x.audio); playingId = id; player.setAttribute('playsinline', '');
+  const setIcon = (pid, on) => { const b = btns().find(e => e.dataset.id === pid); if (b) b.innerHTML = ic(on ? 'pause' : 'play', 18); };
+  btns().forEach(b => { b.innerHTML = ic('play', 18); });
+  player.ontimeupdate = () => { const bar = $('#vb-' + id); if (bar && player.duration) bar.style.width = Math.min(100, player.currentTime / player.duration * 100) + '%'; };
+  player.onplay = () => setIcon(id, true);
+  player.onpause = () => setIcon(id, false);
+  player.onended = () => { setIcon(id, false); const bar = $('#vb-' + id); if (bar) bar.style.width = '0'; playingId = null; };
+  player.play().catch(e => { errLog(e); toast('לא הצלחנו לנגן את ההקלטה במכשיר הזה.'); });
+}
+
+// =====================================================
 // פעולות (לחיצות)
 // =====================================================
 const A = {
   // התחברות והרשמה
   signIn: el => signIn(el),
-  signOut: async () => { closeSheet(); unsubAll(); await signOut(auth).catch(errLog); },
+  signOut: async () => { closeSheet(); if (CALL.id) finishCall(true, ''); unsubAll(); await signOut(auth).catch(errLog); },
   obColor: el => { ob.color = el.dataset.c; ob.name = $('#ob-name').value; renderOnboarding(); },
   obBack: () => { ob.step--; renderOnboarding(); },
   obRadius: el => { ob.radius = +el.dataset.r; renderOnboarding(); },
@@ -1571,6 +1819,21 @@ const A = {
     else if (kind === 'promo') { keepPromo(); }
     else if (kind === 'editname') { inp.dispatchEvent(new Event('change', { bubbles: true })); inp.blur(); }
   },
+
+  // שיחות והודעות קוליות
+  call: el => startCall(el.dataset.id),
+  callAccept: () => acceptCall(),
+  callDecline: () => declineCall(),
+  callHang: () => finishCall(true, ''),
+  callMute: () => {
+    if (!CALL.stream) return;
+    CALL.muted = !CALL.muted; CALL.stream.getAudioTracks().forEach(t => { t.enabled = !CALL.muted; });
+    const b = $('#callscreen [data-a=callMute]'); if (b) { b.classList.toggle('on', CALL.muted); b.innerHTML = ic(CALL.muted ? 'micOff' : 'mic', 26); }
+  },
+  recStart: el => startRec(el.dataset.id),
+  recCancel: () => stopRec(true),
+  recSend: () => stopRec(false),
+  vplay: el => playVoice(el.dataset.id),
 
   // מיקום
   useLive: el => { lsSet('ll_live', '1'); busy(el, true, ''); locate(true); setTimeout(() => busy(el, false), 4000); },

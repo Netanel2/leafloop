@@ -2,5 +2,6 @@
   "name": "leafloop",
   "main": "worker.js",
   "compatibility_date": "2025-09-01",
-  "assets": { "directory": "./", "binding": "ASSETS" }
+  "assets": { "directory": "./", "binding": "ASSETS" },
+  "keep_vars": true
 }
