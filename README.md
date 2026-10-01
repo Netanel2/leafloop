@@ -78,6 +78,31 @@
 
 ---
 
+## כתובת חלופית חינמית ב-Vercel
+
+האתר מתפרסם גם ב-`https://leafloop-nine.vercel.app`. הקובץ `vercel.json` מעביר את ההתחברות, השיחות והדיווחים לשרת שכבר קיים ב-Cloudflare.
+בהתחברות עם Google צריך שתי הגדרות:
+1. **Firebase:** Authorized domains, ובו `leafloop-nine.vercel.app` ✓
+2. **Google Cloud:** בתוך Web client:
+   - Authorized JavaScript origins: `https://leafloop-nine.vercel.app`
+   - Authorized redirect URIs: `https://leafloop-nine.vercel.app/__/auth/handler`
+
+## כתובת חלופית חינמית ב-Netlify
+
+אותו מאגר GitHub מתפרסם גם ב-Netlify, בכתובת כמו `leafloop.netlify.app`. כל העדכונים מגיעים לשני המקומות אוטומטית. הקובץ `_redirects` מעביר התחברות, שיחות ודיווחים לשרת שכבר קיים ב-Cloudflare.
+
+**הקמה (פעם אחת):**
+1. נכנסים ל-https://app.netlify.com, לוחצים **Sign up** ובוחרים **GitHub**.
+2. **Add new site**, ואז **Import an existing project**, ואז **GitHub**. מאשרים גישה ובוחרים את המאגר `leafloop`.
+3. **Build command:** משאירים ריק. **Publish directory:** משאירים ריק (או נקודה `.`). לוחצים **Deploy**.
+4. **Site configuration**, ואז **Change site name**, וכותבים `leafloop`. הכתובת תהיה `https://leafloop.netlify.app`.
+
+**חיבור ההתחברות עם Google לכתובת החדשה:**
+1. **Firebase:** Authentication, ואז Settings, ואז Authorized domains, ואז Add domain: `leafloop.netlify.app`
+2. **Google Cloud** (https://console.cloud.google.com/apis/credentials?project=leafloop-f882c), ואז Web client:
+   - Authorized JavaScript origins: `https://leafloop.netlify.app`
+   - Authorized redirect URIs: `https://leafloop.netlify.app/__/auth/handler`
+
 ## כשמשתמש מתלונן שהאתר לא עולה
 
 1. **בטלפון של המשתמש:** אם האפליקציה לא נטענת תוך 12 שניות, מופיע מסך "האפליקציה לא נטענה" עם כפתור **"תיקון ורענון"**, שמנקה זיכרון ישן וטוען מחדש. ב"פרטים טכניים" רואים את הסיבה, ואפשר לצלם ולשלוח.

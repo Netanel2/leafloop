@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/__/auth/:path*", "destination": "https://leafloop-f882c.firebaseapp.com/__/auth/:path*" },
+    { "source": "/__/firebase/:path*", "destination": "https://leafloop-f882c.firebaseapp.com/__/firebase/:path*" },
+    { "source": "/fb/:path*", "destination": "https://leafloop.netanelkk9.workers.dev/fb/:path*" },
+    { "source": "/api/:path*", "destination": "https://leafloop.netanelkk9.workers.dev/api/:path*" }
+  ]
+}

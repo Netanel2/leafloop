@@ -70,7 +70,9 @@ export default {
     }
     if (url.pathname === '/api/turn') {
       const origin = request.headers.get('Origin');
-      if (origin && new URL(origin).host !== url.host) return new Response('forbidden', { status: 403 });
+      // מותר מהכתובת הזו, מאתר ה-Netlify של LeafLoop, או מדומיין שהוגדר ב-ALLOWED_HOSTS
+      const okHost = h => h === url.host || /^leafloop[a-z0-9-]*\.(netlify|vercel)\.app$/.test(h) || String(env.ALLOWED_HOSTS || '').split(',').map(x => x.trim()).filter(Boolean).includes(h);
+      if (origin && !okHost(new URL(origin).host)) return new Response('forbidden', { status: 403 });
       const auth = request.headers.get('Authorization') || '';
       const uid = auth.startsWith('Bearer ') ? await verifyIdToken(auth.slice(7)) : null;
       if (!uid) return new Response(JSON.stringify({ iceServers: [] }), { status: 401, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
