@@ -13,7 +13,11 @@ service cloud.firestore {
     // פרופילים: כולם רואים, רק הבעלים משנה
     match /users/{uid} {
       allow read: if signed();
-      allow create, update, delete: if signed() && me() == uid;
+      allow create: if signed() && me() == uid && request.resource.data.get('banned', false) == false;
+      // המשתמש מעדכן את עצמו, אבל לא יכול לבטל השעיה. המנהל יכול רק להשעות או לבטל השעיה.
+      allow update: if (signed() && me() == uid && request.resource.data.get('banned', false) == resource.data.get('banned', false))
+        || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['banned']));
+      allow delete: if signed() && me() == uid;
       // מידע פרטי (החלקות, שמורים, חסומים): רק הבעלים
       match /private/{docId} {
         allow read, write: if signed() && me() == uid;
@@ -42,7 +46,7 @@ service cloud.firestore {
 
     // התאמות וצ'אט: רק שני המשתתפים
     match /matches/{id} {
-      allow read: if signed() && (resource == null || me() in resource.data.users);
+      allow read: if isAdmin() || (signed() && (resource == null || me() in resource.data.users));
       allow create: if signed() && me() in request.resource.data.users && request.resource.data.users.size() == 2;
       allow update: if signed() && me() in resource.data.users && request.resource.data.users == resource.data.users;
       match /messages/{mid} {
@@ -53,7 +57,7 @@ service cloud.firestore {
 
     // הצעות החלפה: רק השולח והמקבל
     match /requests/{id} {
-      allow read: if signed() && (resource.data.from == me() || resource.data.to == me());
+      allow read: if isAdmin() || (signed() && (resource.data.from == me() || resource.data.to == me()));
       allow create: if signed() && request.resource.data.from == me();
       allow update: if signed() && (resource.data.from == me() || resource.data.to == me());
       allow delete: if signed() && resource.data.from == me();
@@ -95,7 +99,7 @@ service cloud.firestore {
 
     // שיחות קוליות: רק שני המשתתפים. אפשר להתקשר רק למי שיש איתו התאמה.
     match /calls/{id} {
-      allow read: if signed() && (resource.data.from == me() || resource.data.to == me());
+      allow read: if isAdmin() || (signed() && (resource.data.from == me() || resource.data.to == me()));
       allow create: if signed() && request.resource.data.from == me()
         && me() in matchUsers(request.resource.data.matchId)
         && request.resource.data.to in matchUsers(request.resource.data.matchId);
@@ -110,6 +114,7 @@ service cloud.firestore {
     // דיווחים: אפשר רק לשלוח
     match /reports/{id} {
       allow create: if signed() && request.resource.data.from == me();
+      allow read, update: if isAdmin();
     }
   }
 }

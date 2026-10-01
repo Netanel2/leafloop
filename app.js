@@ -3,7 +3,7 @@ import {
   initializeApp, getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup,
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where,
-  getDocs, onSnapshot, orderBy, limit, increment, arrayUnion, arrayRemove, writeBatch
+  getDocs, onSnapshot, orderBy, limit, increment, arrayUnion, arrayRemove, writeBatch, getCountFromServer
 } from './fb.js';
 import { FIREBASE_CONFIG } from './firebase-config.js';
 
@@ -536,6 +536,7 @@ async function loadPool(force) {
   const ids = [...new Set(S.pool.map(p => p.ownerId))];
   ids.forEach(id => { delete S.users[id]; });
   await Promise.all(ids.map(getUser));
+  S.pool = S.pool.filter(p => !(S.users[p.ownerId] && S.users[p.ownerId].banned));
   try {
     const [ns, ps] = await Promise.all([
       getDocs(query(collection(db, 'nurseries'), where('active', '==', true), limit(100))),
@@ -1327,7 +1328,7 @@ VIEWS.profile = function () {
   <div class="badges">${badges.map(([i, l, on]) => `<div class="bdg ${on ? '' : 'locked'}"><i>${i}</i>${l}</div>`).join('')}</div>
   <div class="pad"><button class="btn ghost" data-a="invite">${ic('share')} הזמנת חברים ל-${APP_NAME}</button>
   ${S.myNursery ? `<button class="btn sun" data-a="open" data-to="mynursery">🌿 המשתלה שלי: ${esc(S.myNursery.name)}</button>` : `<button class="btn ghost" data-a="nurseryApply">🌿 יש לכם משתלה? הצטרפו</button>`}
-  ${isAdmin() ? `<button class="btn primary" data-a="open" data-to="admin">${ic('settings')} ניהול משתלות</button>` : ''}</div>
+  ${isAdmin() ? `<button class="btn primary" data-a="open" data-to="admin">📊 לוח ניהול</button>` : ''}</div>
   <div style="height:16px"></div>`;
   loadReviews();
 };
@@ -1521,9 +1522,7 @@ function nurseryApplySheet() {
   <div class="err" id="ap-err"></div>
   <button class="btn hot" data-a="sendApply" style="margin-top:12px">שליחת בקשה</button>`);
 }
-VIEWS.admin = async function () {
-  if (!isAdmin()) { go('profile'); return; }
-  $('#view').innerHTML = `<div class="loading"><span class="spin big"></span></div>`;
+async function adminNurseries(box) {
   let apps = [], ns = [], ps = [];
   try {
     const [a, b, c] = await Promise.all([
@@ -1531,10 +1530,10 @@ VIEWS.admin = async function () {
       getDocs(collection(db, 'nurseries')), getDocs(collection(db, 'promos'))
     ]);
     apps = a.docs.map(d => ({ id: d.id, ...d.data() })); ns = b.docs.map(d => ({ id: d.id, ...d.data() })); ps = c.docs.map(d => ({ id: d.id, ...d.data() }));
-  } catch (e) { errLog(e); $('#view').innerHTML = `<div class="empty"><h3>אין גישה</h3><p>בדקו שכללי האבטחה העדכניים פורסמו ב-Firebase.</p></div>`; return; }
+  } catch (e) { errLog(e); box.innerHTML = adminNoAccess(); return; }
   S.adminApps = apps;
   const st = id => { const x = ps.filter(p => p.nurseryId === id); return { n: x.filter(p => p.active).length, v: x.reduce((a, p) => a + (p.views || 0), 0), c: x.reduce((a, p) => a + (p.clicks || 0), 0) }; };
-  $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="profile" aria-label="חזרה">${ic('back')}</button><h1>ניהול משתלות</h1></div>
+  box.innerHTML = `
   <h2 class="section-t" style="margin-top:4px">בקשות הצטרפות (${apps.length})</h2>
   ${apps.length ? apps.map(a => `<div class="req"><b>${esc(a.name)}</b>, ${esc(a.city)}<div class="small">${esc(a.contact || '')}, <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>, ${esc(a.email)}</div>${a.notes ? `<div class="req-msg">"${esc(a.notes)}"</div>` : ''}
     <div class="req-btns"><button class="btn primary sm" style="flex:1" data-a="adminApprove" data-id="${a.id}">אישור והפעלה</button><button class="btn ghost sm" style="flex:1" data-a="adminDecline" data-id="${a.id}">דחייה</button></div></div>`).join('') : '<p class="muted small" style="padding:0 18px">אין בקשות חדשות.</p>'}
@@ -1542,6 +1541,103 @@ VIEWS.admin = async function () {
   <div class="list">${ns.map(n => { const x = st(n.id); return `<div class="li"><span class="thumb">${n.img ? `<div class="photo"><img src="${n.img}" alt=""></div>` : '<div class="art nursery-art">🌿</div>'}</span><div class="li-main"><div class="li-t">${esc(n.name)}</div><div class="li-s">${esc(n.ownerEmail || '')}</div><div class="small muted">${x.n} הצעות, 👁 ${x.v}, 👆 ${x.c}</div></div><label class="mini-toggle" aria-label="פעילה"><input type="checkbox" data-change="nurseryActive" data-id="${n.id}" ${n.active ? 'checked' : ''}></label></div>`; }).join('') || '<div class="empty">עוד אין משתלות.</div>'}</div>
   <div class="pad"><button class="btn ghost" data-a="adminAdd">${ic('plus')} הוספת משתלה ידנית</button></div>`;
 };
+// =====================================================
+// לוח ניהול
+// =====================================================
+const adminNoAccess = () => `<div class="empty"><h3>אין גישה לנתונים</h3><p>צריך לפרסם ב-Firebase את כללי האבטחה העדכניים (firestore.rules), ואז לרענן.</p></div>`;
+const DAY = 864e5;
+const startOfDay = (t = Date.now()) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+async function cnt(q) { try { const r = await getCountFromServer(q); return r.data().count; } catch (e) { errLog(e); return null; } }
+const nfmt = n => (n == null ? '–' : Number(n).toLocaleString('he-IL'));
+VIEWS.admin = async function (tab) {
+  if (!isAdmin()) { go('profile'); return; }
+  tab = tab || 'overview';
+  const T = [['overview', '📊 סקירה'], ['users', '👥 משתמשים'], ['reports', '🚩 דיווחים'], ['nurseries', '🌿 משתלות']];
+  $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="profile" aria-label="חזרה">${ic('back')}</button><h1>לוח ניהול</h1>
+    <span class="sp" style="flex:1"></span><button class="icon-btn" data-a="open" data-to="admin/${tab}" aria-label="רענון">${ic('refresh', 20)}</button></div>
+  <div class="tabs">${T.map(([k, l]) => `<button class="sel ${tab === k ? 'on' : ''}" data-a="open" data-to="admin/${k}">${l}</button>`).join('')}</div>
+  <div id="admin-box"><div class="loading" style="min-height:40vh"><span class="spin big"></span></div></div>`;
+  const box = $('#admin-box');
+  if (tab === 'nurseries') return adminNurseries(box);
+  if (tab === 'users') return adminUsers(box);
+  if (tab === 'reports') return adminReports(box);
+  return adminOverview(box);
+};
+async function adminOverview(box) {
+  const now = Date.now(), today = startOfDay(), d7 = now - 7 * DAY, d30 = now - 30 * DAY;
+  const U = collection(db, 'users'), P = collection(db, 'plants'), Mt = collection(db, 'matches');
+  const [uAll, uToday, u7, u30, aToday, a7, pAll, pAvail, pNew7, mSwap, mGift, mBoth, mSale, frozen, mtAll, mtDone, mtCancel, rqPend, calls7, repOpen, revAll] = await Promise.all([
+    cnt(U), cnt(query(U, where('createdAt', '>=', today))), cnt(query(U, where('createdAt', '>=', d7))), cnt(query(U, where('createdAt', '>=', d30))),
+    cnt(query(U, where('lastSeen', '>=', today))), cnt(query(U, where('lastSeen', '>=', d7))),
+    cnt(P), cnt(query(P, where('available', '==', true))), cnt(query(P, where('t', '>=', d7))),
+    cnt(query(P, where('mode', '==', 'swap'))), cnt(query(P, where('mode', '==', 'gift'))), cnt(query(P, where('mode', '==', 'both'))), cnt(query(P, where('mode', '==', 'sale'))), cnt(query(P, where('frozen', '==', true))),
+    cnt(Mt), cnt(query(Mt, where('status', '==', 'swapped'))), cnt(query(Mt, where('status', '==', 'cancelled'))),
+    cnt(query(collection(db, 'requests'), where('status', '==', 'pending'))),
+    cnt(query(collection(db, 'calls'), where('t', '>=', d7))),
+    cnt(query(collection(db, 'reports'), where('handled', '==', false))),
+    cnt(collection(db, 'reviews'))
+  ]);
+  if (uAll == null && pAll == null) { box.innerHTML = adminNoAccess(); return; }
+  // הרשמות ב-14 הימים האחרונים + ערים
+  let recent = [];
+  try { const s2 = await getDocs(query(U, where('createdAt', '>=', startOfDay(now - 13 * DAY)))); recent = s2.docs.map(d => d.data()); } catch (e) { errLog(e); }
+  const days = Array.from({ length: 14 }, (_, i) => { const st = startOfDay(now - (13 - i) * DAY); return { st, n: recent.filter(u => u.createdAt >= st && u.createdAt < st + DAY).length }; });
+  const maxD = Math.max(1, ...days.map(d => d.n));
+  let cities = {};
+  try { const s3 = await getDocs(query(U, limit(2000))); s3.docs.forEach(d => { const c = d.data().city || 'לא ידוע'; cities[c] = (cities[c] || 0) + 1; }); } catch (e) { errLog(e); }
+  const topC = Object.entries(cities).sort((a, b) => b[1] - a[1]).slice(0, 6), maxC = Math.max(1, ...topC.map(x => x[1]));
+  const plantsByCat = {};
+  S.pool.forEach(p => { const k = pName(p); plantsByCat[k] = (plantsByCat[k] || 0) + 1; });
+  const topP = Object.entries(plantsByCat).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const activeMatches = mtAll == null ? null : mtAll - (mtDone || 0) - (mtCancel || 0);
+  const stat = (n, l, hot) => `<div class="kpi ${hot ? 'hot' : ''}"><b>${nfmt(n)}</b><span>${l}</span></div>`;
+  box.innerHTML = `
+  <h2 class="section-t" style="margin-top:6px">משתמשים</h2>
+  <div class="kpis">${stat(uAll, 'סה״כ משתמשים', true)}${stat(uToday, 'הצטרפו היום')}${stat(u7, 'חדשים השבוע')}${stat(u30, 'חדשים החודש')}${stat(aToday, 'פעילים היום')}${stat(a7, 'פעילים השבוע')}</div>
+  <div class="panel"><div class="panel-t">הרשמות ב-14 הימים האחרונים</div>
+    <div class="bars">${days.map(d => `<div class="bar" title="${new Date(d.st).toLocaleDateString('he-IL')}: ${d.n}"><i style="height:${Math.round(d.n / maxD * 100)}%"></i><span>${d.n || ''}</span><em>${new Date(d.st).getDate()}</em></div>`).join('')}</div></div>
+  ${topC.length ? `<div class="panel"><div class="panel-t">ערים מובילות</div>${topC.map(([c, n]) => `<div class="hbar"><span>${esc(c)}</span><i style="width:${Math.round(n / maxC * 100)}%"></i><b>${n}</b></div>`).join('')}</div>` : ''}
+  <h2 class="section-t">צמחים</h2>
+  <div class="kpis">${stat(pAll, 'סה״כ מודעות', true)}${stat(pAvail, 'זמינות עכשיו')}${stat(pNew7, 'חדשות השבוע')}${stat(frozen, 'מוקפאות')}</div>
+  <div class="chips" style="padding:10px 14px 0;gap:8px"><span class="mode-pill m-swap">🔄 להחלפה ${nfmt(mSwap)}</span><span class="mode-pill m-gift">🎁 במתנה ${nfmt(mGift)}</span><span class="mode-pill m-both">💚 גם וגם ${nfmt(mBoth)}</span><span class="mode-pill m-sale">🏷️ למכירה ${nfmt(mSale)}</span></div>
+  ${topP.length ? `<div class="panel"><div class="panel-t">הצמחים הנפוצים ביותר</div>${topP.map(([c, n]) => `<div class="hbar"><span>${esc(c)}</span><i style="width:${Math.round(n / topP[0][1] * 100)}%"></i><b>${n}</b></div>`).join('')}</div>` : ''}
+  <h2 class="section-t">פעילות</h2>
+  <div class="kpis">${stat(mtAll, 'התאמות סה״כ', true)}${stat(activeMatches, 'התאמות פעילות')}${stat(mtDone, 'החלפות שבוצעו')}${stat(mtCancel, 'בוטלו')}${stat(rqPend, 'פניות שמחכות לתשובה')}${stat(calls7, 'שיחות קוליות השבוע')}${stat(revAll, 'דירוגים')}${stat(repOpen, 'דיווחים פתוחים', repOpen > 0)}</div>
+  ${repOpen ? `<div class="pad"><button class="btn hot" data-a="open" data-to="admin/reports">🚩 ${repOpen === 1 ? 'יש דיווח פתוח' : `יש ${repOpen} דיווחים פתוחים`}</button></div>` : ''}
+  <p class="small muted" style="padding:14px 18px 24px">"פעילים" הם מי שפתחו את האפליקציה בפרק הזמן הזה. הנתונים מתעדכנים בכל רענון.</p>`;
+}
+async function adminUsers(box) {
+  let list = [];
+  try { const s2 = await getDocs(query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(200))); list = s2.docs.map(d => ({ id: d.id, ...d.data() })); }
+  catch (e) { errLog(e); box.innerHTML = adminNoAccess(); return; }
+  S.adminUsers = list;
+  const row = u => `<div class="li"><span class="thumb">${avatar(u, 'av')}</span><div class="li-main"><div class="li-t">${esc(u.name || '')}${u.banned ? ' <span class="pill st-cancelled">מושעה</span>' : ''}</div>
+    <div class="li-s">${esc(u.city || '')}, הצטרף/ה ${u.createdAt ? ago(u.createdAt) : '–'}</div><div class="small muted">נראה/תה ${u.lastSeen ? ago(u.lastSeen) : '–'}, ${u.swaps || 0} החלפות${u.ratingCount ? `, ★${Number(u.ratingAvg).toFixed(1)}` : ''}</div></div>
+    <button class="btn ghost sm" data-a="adminBan" data-id="${esc(u.id)}" data-on="${u.banned ? '0' : '1'}">${u.banned ? 'ביטול השעיה' : 'השעיה'}</button></div>`;
+  box.innerHTML = `<div class="sbox admin-search">${ic('search', 18)}<input id="au-q" type="search" placeholder="חיפוש לפי שם או עיר" autocomplete="off"></div>
+  <p class="small muted" style="padding:6px 18px 0">${list.length} המשתמשים האחרונים שהצטרפו</p>
+  <div class="list" id="au-list">${list.map(row).join('') || '<div class="empty">אין משתמשים.</div>'}</div><div style="height:20px"></div>`;
+  $('#au-q').addEventListener('input', e => {
+    const q = e.target.value.trim();
+    $('#au-list').innerHTML = list.filter(u => !q || (u.name || '').includes(q) || (u.city || '').includes(q)).map(row).join('') || '<div class="empty">לא נמצא.</div>';
+  });
+}
+async function adminReports(box) {
+  let reps = [];
+  try { const s2 = await getDocs(query(collection(db, 'reports'), orderBy('t', 'desc'), limit(100))); reps = s2.docs.map(d => ({ id: d.id, ...d.data() })); }
+  catch (e) { errLog(e); box.innerHTML = adminNoAccess(); return; }
+  const ids = [...new Set(reps.flatMap(r => [r.from, r.about]))];
+  await Promise.all(ids.map(getUser));
+  const nm = id => esc((S.users[id] && S.users[id].name) || 'משתמש/ת');
+  const open = reps.filter(r => !r.handled), done = reps.filter(r => r.handled);
+  const card = r => `<div class="req ${r.handled ? 'done' : ''}"><div><b>${nm(r.from)}</b> דיווח/ה על <b>${nm(r.about)}</b><span class="small muted">, ${ago(r.t)}</span></div>
+    <div class="small" style="margin-top:4px">סיבה: ${esc(r.reason || '')}</div>${r.text ? `<div class="req-msg">"${esc(r.text)}"</div>` : ''}
+    ${r.handled ? `<div class="small muted">✓ טופל</div>` : `<div class="req-btns"><button class="btn ghost sm" style="flex:1" data-a="adminHandled" data-id="${r.id}">✓ סימון כטופל</button><button class="btn hot sm" style="flex:1" data-a="adminBan" data-id="${esc(r.about)}" data-on="1" data-rep="${r.id}">השעיית ${nm(r.about)}</button></div>`}</div>`;
+  box.innerHTML = `<h2 class="section-t" style="margin-top:6px">פתוחים (${open.length})</h2>${open.map(card).join('') || '<p class="muted small" style="padding:0 18px">אין דיווחים פתוחים 🎉</p>'}
+  ${done.length ? `<h2 class="section-t">טופלו (${done.length})</h2>${done.map(card).join('')}` : ''}
+  <p class="small muted" style="padding:14px 18px 24px">השעיה מסתירה את כל המודעות של המשתמש/ת וחוסמת את הכניסה שלו/ה לאפליקציה. אפשר לבטל בכל רגע מלשונית המשתמשים.</p>`;
+}
+
 async function createNursery(d) {
   const c = CITIES.find(x => x.n === d.city) || CITIES[0];
   const ref = doc(collection(db, 'nurseries'));
@@ -1931,7 +2027,7 @@ const A = {
     const m = S.matches.find(x => x.id === el.dataset.id);
     busy(el, true, 'שולחים…');
     try {
-      await addDoc(collection(db, 'reports'), { from: uid(), about: otherId(m), matchId: m.id, reason: ($('#sheet input[name=reason]:checked') || {}).value || '', text: $('#rep-txt').value.trim(), t: Date.now() });
+      await addDoc(collection(db, 'reports'), { from: uid(), handled: false, about: otherId(m), matchId: m.id, reason: ($('#sheet input[name=reason]:checked') || {}).value || '', text: $('#rep-txt').value.trim(), t: Date.now() });
       closeSheet(); toast('תודה. הדיווח התקבל ונבדוק אותו.');
     } catch (e) { errLog(e); busy(el, false); toast('השליחה לא הצליחה. נסו שוב.'); }
   },
@@ -2032,17 +2128,32 @@ const A = {
       closeSheet(); VIEWS.mynursery(); toast('הפרטים נשמרו');
     } catch (e) { errLog(e); busy(el, false); $('#n-err').textContent = 'השמירה לא הצליחה. נסו שוב.'; }
   },
+  adminBan: async el => {
+    const on = el.dataset.on === '1', id = el.dataset.id;
+    const u = S.users[id] || (S.adminUsers || []).find(x => x.id === id) || {};
+    if (on && !confirm(`להשעות את ${u.name || 'המשתמש/ת'}? כל המודעות שלו/ה יוסתרו והכניסה לאפליקציה תיחסם.`)) return;
+    busy(el, true);
+    try {
+      await updateDoc(doc(db, 'users', id), { banned: on });
+      if (el.dataset.rep) await updateDoc(doc(db, 'reports', el.dataset.rep), { handled: true });
+      if (S.users[id]) S.users[id].banned = on;
+      toast(on ? 'המשתמש/ת הושעה' : 'ההשעיה בוטלה'); VIEWS.admin(curRoute()[1]);
+    } catch (e) { errLog(e); busy(el, false); toast('לא הצליח. בדקו שכללי האבטחה העדכניים פורסמו.'); }
+  },
+  adminHandled: async el => {
+    try { await updateDoc(doc(db, 'reports', el.dataset.id), { handled: true }); VIEWS.admin('reports'); } catch (e) { errLog(e); toast('לא הצליח.'); }
+  },
   adminApprove: async el => {
     const a = (S.adminApps || []).find(x => x.id === el.dataset.id); if (!a) return;
     busy(el, true);
     try {
       const nid = await createNursery(a);
       await updateDoc(doc(db, 'nurseryApplications', a.id), { status: 'approved', nurseryId: nid });
-      toast(`${a.name} הופעלה 🌿`); VIEWS.admin();
+      toast(`${a.name} הופעלה 🌿`); VIEWS.admin('nurseries');
     } catch (e) { errLog(e); busy(el, false); toast('האישור לא הצליח.'); }
   },
   adminDecline: async el => {
-    try { await updateDoc(doc(db, 'nurseryApplications', el.dataset.id), { status: 'declined' }); VIEWS.admin(); } catch (e) { errLog(e); toast('לא הצליח.'); }
+    try { await updateDoc(doc(db, 'nurseryApplications', el.dataset.id), { status: 'declined' }); VIEWS.admin('nurseries'); } catch (e) { errLog(e); toast('לא הצליח.'); }
   },
   adminAdd: () => sheet(`<h3>הוספת משתלה</h3>
     <p class="label">שם המשתלה</p><input class="field" id="ad-name">
@@ -2056,7 +2167,7 @@ const A = {
     const v = id => $('#' + id).value.trim();
     if (!v('ad-name') || !v('ad-email').includes('@')) { $('#ad-err').textContent = 'מלאו שם ואימייל תקין.'; return; }
     busy(el, true);
-    try { await createNursery({ name: v('ad-name'), city: v('ad-city'), phone: v('ad-phone'), email: v('ad-email') }); closeSheet(); toast('המשתלה נוספה'); VIEWS.admin(); }
+    try { await createNursery({ name: v('ad-name'), city: v('ad-city'), phone: v('ad-phone'), email: v('ad-email') }); closeSheet(); toast('המשתלה נוספה'); VIEWS.admin('nurseries'); }
     catch (e) { errLog(e); busy(el, false); $('#ad-err').textContent = 'היצירה לא הצליחה.'; }
   },
 
@@ -2262,6 +2373,11 @@ else {
       const snap = await getDoc(doc(db, 'users', user.uid));
       if (!snap.exists()) { ob = null; route(); return; }
       S.profile = { id: user.uid, ...snap.data() };
+      if (S.profile.banned && !isAdmin()) {
+        $('#tabbar').style.display = 'none';
+        $('#view').innerHTML = `<div class="empty" style="padding-top:25vh"><h3>החשבון הושעה</h3><p>החשבון הושעה בעקבות דיווח. אם נראה לכם שזו טעות, כתבו ל-<a href="mailto:${ADMIN_EMAILS[0]}">${ADMIN_EMAILS[0]}</a>.</p><button class="btn ghost sm" data-a="signOut" style="margin:12px auto 0">התנתקות</button></div>`;
+        return;
+      }
       await startSession();
       route();
     } catch (e) {
