@@ -140,8 +140,9 @@ const rating = u => (u && u.ratingCount ? `★${Number(u.ratingAvg).toFixed(1)}`
 const otherId = m => m.users.find(x => x !== uid());
 const otherInfo = m => (m.info && m.info[otherId(m)]) || { name: 'משתמש/ת', color: '#19A55B' };
 
-function visual(p) {
-  if (!p || (!p.catId && !p.thumb && !p.img)) return `<div class="art gift-art" aria-label="מתנה">🎁</div>`;
+const askArt = `<div class="art gift-art ask-art" aria-label="שיחה">💬</div>`;
+function visual(p, kind) {
+  if (!p || (!p.catId && !p.thumb && !p.img)) return kind === 'ask' ? askArt : `<div class="art gift-art" aria-label="מתנה">🎁</div>`;
   const key = p.id || p.catId;
   const src = S.photos[key] || p.thumb;
   if (src) return `<div class="photo"><img data-pid="${esc(key)}" src="${src}" alt="${esc(pName(p))}"></div>`;
@@ -253,7 +254,7 @@ function notifList() {
   const out = [];
   S.incoming.forEach(r => {
     const first = Object.values(r.offerSnap || {})[0];
-    out.push({ t: r.t, text: first ? `🌿 ${r.fromInfo.name} רוצה להציע לך ${catById(first.catId).he} בתמורה ל${catById(r.targetSnap.catId).he} שלך.` : `🎁 ${r.fromInfo.name} ישמח/תשמח לקבל את ה${catById(r.targetSnap.catId).he} שלך.`, link: 'matches', unread: true });
+    out.push({ t: r.t, text: first ? `🌿 ${r.fromInfo.name} רוצה להציע לך ${catById(first.catId).he} בתמורה ל${catById(r.targetSnap.catId).he} שלך.` : r.kind === 'ask' ? `💚 ${r.fromInfo.name} מתעניין/ת ב${catById(r.targetSnap.catId).he} שלך.` : `🎁 ${r.fromInfo.name} ישמח/תשמח לקבל את ה${catById(r.targetSnap.catId).he} שלך.`, link: 'matches', unread: true });
   });
   activePromos().filter(pr => iWant(pr)).forEach(pr => {
     out.push({ t: pr.t, text: `🌿 ${pr.nurseryName} מציעה ${pr.title}, ${fmtKm(dist(pr))} ממך.`, link: 'nursery/' + pr.nurseryId, unread: (pr.t || 0) > (S.priv.alertsSeenAt || 0) });
@@ -788,14 +789,19 @@ function openRequestSheet(p, u, sup) {
     return;
   }
   if (mode === 'swap' && !myAvail().length) {
-    sheet(`<h3>עוד אין לך צמחים להציע</h3><p class="muted">${esc(u.name)} מחפש/ת החלפה. כדי לשלוח הצעה, הוסיפו קודם צמח אחד לפחות. אם ${esc(u.name)} ישנה/תשנה את המודעה ל"גם וגם" או "במתנה", תוכלו לבקש גם בלי להציע.</p><button class="btn hot" data-a="open" data-to="add">הוספת צמח</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
+    sheet(`<h3>💚 רוצים את ה${esc(pName(p))}?</h3>
+    <p class="muted">${esc(u.name)} מחפש/ת החלפה, אבל אפשר לשלוח התעניינות גם בלי צמח. ${esc(u.name)} יחליט/תחליט אם מתאים, ואז תדברו בצ'אט.</p>
+    <p class="label">כמה מילים ל${esc(u.name)}</p><textarea class="field" id="req-msg" rows="3" maxlength="300" placeholder="היי! אני מאוד אוהבת את הצמח. עוד אין לי צמח להחלפה, אבל אשמח לדבר 🌿"></textarea>
+    <div class="err" id="req-err"></div>
+    <button class="btn hot" data-a="sendRequest" data-id="${p.id}">💚 שליחת התעניינות</button>
+    <button class="btn ghost" data-a="open" data-to="add">${ic('plus')} הוספת צמח שלי להצעה</button>`);
     return;
   }
   const wanted = theyWantMine(u).map(x => x.id);
   const wl = (u.wishlist || []).map(w => esc(catById(w).he)).join(', ');
   sheet(`<h3>${sup ? 'סופר מעוניין! ⭐' : 'שמרנו שאתם מעוניינים'}</h3>
   <p class="muted">${mode === 'both' ? `${esc(u.name)} מוכן/ה למסור במתנה או להחליף. אפשר לבקש בלי לתת כלום, או להציע משהו בתמורה.` : `אין כאן התאמה אוטומטית, אבל אפשר לשלוח ל${esc(u.name)} הצעת החלפה.`}${wl ? ` ברשימת המשאלות: ${wl}.` : ''}${p.open ? ' פתוח/ה גם להצעות אחרות.' : ''}</p>
-  ${myAvail().length ? `<p class="label">${mode === 'both' ? 'רוצים להציע משהו בתמורה? (לא חובה)' : `מה להציע בתמורה ל${esc(pName(p))}?`}</p>
+  ${myAvail().length ? `<p class="label">${mode === 'both' ? 'רוצים להציע משהו בתמורה? (לא חובה)' : `מה להציע בתמורה ל${esc(pName(p))}? (אפשר גם בלי)`}</p>
   <div class="pick">${myAvail().map(x => `<label class="pick-item"><input type="checkbox" name="offer" value="${x.id}" ${wanted.includes(x.id) ? 'checked' : ''}><span class="thumb">${visual(x)}</span><span>${esc(pName(x))} <span class="small muted">(${OFFER[x.offer]}${x.qty > 1 ? ' ×' + x.qty : ''})</span>${wanted.includes(x.id) ? `<em>${esc(u.name)} מחפש/ת את זה</em>` : ''}</span></label>`).join('')}</div>` : ''}
   ${msgBox}<div class="err" id="req-err"></div>
   <button class="btn hot" data-a="sendRequest" data-id="${p.id}">${ic('swap')} ${mode === 'both' ? 'שליחת בקשה' : 'שליחת הצעת החלפה'}</button>
@@ -805,7 +811,7 @@ async function sendRequest(el) {
   const p = S.pool.find(x => x.id === el.dataset.id); if (!p) return;
   const u = await getUser(p.ownerId);
   const ids = $$('#sheet input[name=offer]:checked').map(i => i.value);
-  if (modeOf(p) === 'swap' && !ids.length) { $('#req-err').textContent = 'בחרו לפחות צמח אחד להציע.'; return; }
+  const kind = ids.length ? 'swap' : (modeOf(p) === 'swap' ? 'ask' : 'gift');
   const snap = {};
   ids.forEach(id => { const x = S.myPlants.find(y => y.id === id); if (x) snap[id] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer, qty: x.qty || 1 }; });
   const mEl = $('#req-msg'); const msg = mEl ? mEl.value.trim() : '';
@@ -814,9 +820,9 @@ async function sendRequest(el) {
     await addDoc(collection(db, 'requests'), {
       from: uid(), to: p.ownerId, fromInfo: pubInfo(S.profile), toInfo: pubInfo(u),
       target: p.id, targetSnap: { catId: p.catId, thumb: p.thumb || null, offer: p.offer, qty: p.qty || 1 },
-      offer: ids, offerSnap: snap, kind: ids.length ? 'swap' : 'gift', msg, status: 'pending', seen: false, t: Date.now()
+      offer: ids, offerSnap: snap, kind, msg, status: 'pending', seen: false, t: Date.now()
     });
-    closeSheet(); toast(ids.length ? `ההצעה נשלחה ל${u.name}. נעדכן אתכם כשתגיע תשובה.` : `הבקשה נשלחה ל${u.name} 🎁 נעדכן אתכם כשתגיע תשובה.`);
+    closeSheet(); toast(kind === 'swap' ? `ההצעה נשלחה ל${u.name}. נעדכן אתכם כשתגיע תשובה.` : kind === 'ask' ? `ההתעניינות נשלחה ל${u.name} 💚 נעדכן אתכם כשתגיע תשובה.` : `הבקשה נשלחה ל${u.name} 🎁 נעדכן אתכם כשתגיע תשובה.`);
   } catch (e) { errLog(e); busy(el, false); $('#req-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
 }
 async function acceptReq(rid, toChat, el) {
@@ -830,9 +836,9 @@ async function acceptReq(rid, toChat, el) {
   try {
     const u = await getUser(r.from);
     const theirPlants = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
-    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', status: toChat ? 'discussing' : 'agreed' });
+    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', kind: r.kind || (r.offer.length ? 'swap' : 'gift'), status: toChat || r.kind === 'ask' ? 'discussing' : 'agreed' });
     await updateDoc(doc(db, 'requests', rid), { status: 'accepted', matchId: m.id });
-    if (r.msg) sendMsg(m.id, `💬 ${r.fromInfo.name} כתב/ה: ${r.msg}`, null, true);
+    if (r.msg) addDoc(collection(db, 'matches', m.id, 'messages'), { from: uid(), sys: true, text: `💬 ${r.fromInfo.name} כתב/ה: ${r.msg}`, t: Date.now() + 1 }).catch(errLog);
     if (toChat) go('chat/' + m.id); else showMatch(m);
   } catch (e) { errLog(e); busy(el, false); toast('לא הצלחנו לאשר. נסו שוב.'); }
 }
@@ -850,7 +856,7 @@ async function createMatch(o) {
   const now = Date.now();
   const data = {
     users: [me, u.id], info: { [me]: pubInfo(S.profile), [u.id]: pubInfo(u) },
-    give: { [me]: o.mineIds, [u.id]: o.theirIds }, plants: snap, type: o.type, status: o.status || 'discussing',
+    give: { [me]: o.mineIds, [u.id]: o.theirIds }, plants: snap, type: o.type, kind: o.kind || 'swap', status: o.status || 'discussing',
     createdBy: me, createdAt: now, lastAt: now, lastMsg: 'התאמה חדשה!', lastFrom: me,
     unread: { [me]: 0, [u.id]: 1 }, meeting: null, rated: []
   };
@@ -863,12 +869,14 @@ function showMatch(m) {
   const me = uid(), o = otherId(m), name = otherInfo(m).name;
   const mineIds = m.give[me] || [], theirIds = m.give[o] || [];
   const mp = mineIds.length ? snapOf(m, mineIds[0]) : null, tp = theirIds.length ? snapOf(m, theirIds[0]) : null;
-  const title = !mp ? 'מתנה בדרך אליך!' : !tp ? 'מצאת למי למסור!' : 'יש התאמה!';
-  const sub = mp && tp ? 'הצמחים שלכם מצאו אחד את השני.' : 'עוד צמח מצא בית חדש.';
-  const line = !mp ? `ה${esc(pName(tp))} של ${esc(name)} מגיע/ה אליך במתנה 🎁` : !tp ? `ה${esc(pName(mp))} שלך עובר/ת ל${esc(name)} במתנה 🎁` : `ה${esc(pName(mp))} שלך ⇄ ה${esc(pName(tp))} של ${esc(name)}`;
+  const ask = m.kind === 'ask';
+  const title = ask ? 'אפשר לדבר!' : !mp ? 'מתנה בדרך אליך!' : !tp ? 'מצאת למי למסור!' : 'יש התאמה!';
+  const sub = ask ? 'עכשיו אפשר לדבר בצ׳אט ולמצוא מה מתאים לשניכם.' : mp && tp ? 'הצמחים שלכם מצאו אחד את השני.' : 'עוד צמח מצא בית חדש.';
+  const line = ask ? (!mp ? `${esc(name)} פתוח/ה לדבר על ה${esc(pName(tp))} 💚` : `${esc(name)} מתעניין/ת ב${esc(pName(mp))} שלך 💚`)
+    : !mp ? `ה${esc(pName(tp))} של ${esc(name)} מגיע/ה אליך במתנה 🎁` : !tp ? `ה${esc(pName(mp))} שלך עובר/ת ל${esc(name)} במתנה 🎁` : `ה${esc(pName(mp))} שלך ⇄ ה${esc(pName(tp))} של ${esc(name)}`;
   $('#overlay').innerHTML = `<div class="match" role="dialog" aria-label="${title}">
     <div class="burst">${burstLeaves(18)}</div>
-    <div class="pair"><div class="bubble from-r">${visual(mp)}</div><div class="heart">${ic('heart', 28)}</div><div class="bubble from-l">${visual(tp)}</div></div>
+    <div class="pair"><div class="bubble from-r">${visual(mp, m.kind)}</div><div class="heart">${ic('heart', 28)}</div><div class="bubble from-l">${visual(tp, m.kind)}</div></div>
     <h1>${title}</h1>
     <p>${sub}</p>
     <div class="swapline">${line}</div>
@@ -1044,8 +1052,8 @@ VIEWS.matches = function () {
   const reqs = S.incoming.map(r => {
     const first = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
     const target = { id: r.target, ...r.targetSnap };
-    return `<div class="req"><div class="row"><div class="duo"><span class="t">${visual(first[0])}</span><span class="t">${visual(target)}</span></div>
-      <div class="li-main">${first.length ? `<b>${esc(r.fromInfo.name)}</b> רוצה להציע לך <b>${first.map(x => esc(pName(x))).join(' + ')}</b> בתמורה ל<b>${esc(pName(target))}</b> שלך.` : `🎁 <b>${esc(r.fromInfo.name)}</b> ישמח/תשמח לקבל במתנה את ה<b>${esc(pName(target))}</b> שלך.`}${r.msg ? `<div class="req-msg">"${esc(r.msg)}"</div>` : ''}<div class="small muted">${esc(r.fromInfo.city || '')}, ${ago(r.t)}</div></div></div>
+    return `<div class="req"><div class="row"><div class="duo"><span class="t">${visual(first[0], r.kind)}</span><span class="t">${visual(target)}</span></div>
+      <div class="li-main">${first.length ? `<b>${esc(r.fromInfo.name)}</b> רוצה להציע לך <b>${first.map(x => esc(pName(x))).join(' + ')}</b> בתמורה ל<b>${esc(pName(target))}</b> שלך.` : (r.kind === 'ask' ? `💚 <b>${esc(r.fromInfo.name)}</b> מתעניין/ת ב<b>${esc(pName(target))}</b> שלך. עוד אין לו/ה צמח להחלפה, אבל אפשר לדבר.` : `🎁 <b>${esc(r.fromInfo.name)}</b> ישמח/תשמח לקבל במתנה את ה<b>${esc(pName(target))}</b> שלך.`)}${r.msg ? `<div class="req-msg">"${esc(r.msg)}"</div>` : ''}<div class="small muted">${esc(r.fromInfo.city || '')}, ${ago(r.t)}</div></div></div>
       <div class="req-btns"><button class="btn primary sm" style="flex:1" data-a="reqAccept" data-id="${r.id}">אישור</button><button class="btn ghost sm" style="flex:1" data-a="reqChat" data-id="${r.id}">צ'אט</button><button class="btn ghost sm" style="flex:1" data-a="reqDecline" data-id="${r.id}">דחייה</button></div></div>`;
   }).join('');
   $('#view').innerHTML = `<div class="ph"><h1>התאמות</h1></div>
@@ -1058,8 +1066,8 @@ function matchRow(m) {
   const me = uid(), o = otherId(m), info = otherInfo(m);
   const mp = snapOf(m, (m.give[me] || [])[0]), tp = snapOf(m, (m.give[o] || [])[0]);
   const n = (m.unread || {})[me] || 0;
-  return `<button class="li" data-a="open" data-to="chat/${m.id}"><div class="duo"><span class="t">${visual(mp)}</span><span class="t">${visual(tp)}</span></div>
-  <div class="li-main"><div class="li-t">${!(m.give[me] || []).length ? `🎁 ${esc(pName(tp))} במתנה` : !(m.give[o] || []).length ? `🎁 ${esc(pName(mp))} במתנה ל${esc(info.name)}` : `${esc(pName(mp))} ⇄ ${esc(pName(tp))}`}</div><div class="li-s">${esc(info.name)}: ${esc(m.lastMsg || '')}</div></div>
+  return `<button class="li" data-a="open" data-to="chat/${m.id}"><div class="duo"><span class="t">${visual((m.give[me] || []).length ? mp : null, m.kind)}</span><span class="t">${visual((m.give[o] || []).length ? tp : null, m.kind)}</span></div>
+  <div class="li-main"><div class="li-t">${m.kind === 'ask' ? `💚 ${esc(pName((m.give[me] || []).length ? mp : tp))}` : !(m.give[me] || []).length ? `🎁 ${esc(pName(tp))} במתנה` : !(m.give[o] || []).length ? `🎁 ${esc(pName(mp))} במתנה ל${esc(info.name)}` : `${esc(pName(mp))} ⇄ ${esc(pName(tp))}`}</div><div class="li-s">${esc(info.name)}: ${esc(m.lastMsg || '')}</div></div>
   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><span class="pill st-${m.status}">${STATUS[m.status]}</span>${n ? `<span class="unread">${n}</span>` : `<span class="small muted">${ago(m.lastAt)}</span>`}</div></button>`;
 }
 
@@ -1097,8 +1105,8 @@ function renderSwapbar(m) {
   const mine = (m.give[me] || []).map(pid => snapOf(m, pid)), theirs = (m.give[o] || []).map(pid => snapOf(m, pid));
   const el = $('#swapbar'); if (!el) return;
   if (!mine.length) mine.push({}); if (!theirs.length) theirs.push({});
-  const nm = arr => arr.map(x => x.catId ? esc(pName(x)) : 'מתנה').join(' + ');
-  el.innerHTML = `<div class="row sb"><div class="row">${mine.map(x => `<span class="thumb">${visual(x)}</span>`).join('')}<b>${nm(mine)}</b></div><span aria-label="בתמורה ל">⇄</span><div class="row"><b>${nm(theirs)}</b>${theirs.map(x => `<span class="thumb">${visual(x)}</span>`).join('')}</div></div>
+  const nm = arr => arr.map(x => x.catId ? esc(pName(x)) : (m.kind === 'ask' ? 'נדבר' : 'מתנה')).join(' + ');
+  el.innerHTML = `<div class="row sb"><div class="row">${mine.map(x => `<span class="thumb">${visual(x, m.kind)}</span>`).join('')}<b>${nm(mine)}</b></div><span aria-label="בתמורה ל">⇄</span><div class="row"><b>${nm(theirs)}</b>${theirs.map(x => `<span class="thumb">${visual(x, m.kind)}</span>`).join('')}</div></div>
   ${m.meeting ? `<div class="small" style="margin-top:8px">${icInline('calendar', 14)} ${esc(m.meeting.place)}, ${esc(fmtWhen(m.meeting.when))}</div>` : ''}`;
 }
 function updateChatMeta() {
