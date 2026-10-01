@@ -1,10 +1,22 @@
-// חיבור ל-Firebase (גרסה קבועה כדי שלא ישתנה פתאום)
-export { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-export {
+// חיבור ל-Firebase.
+// קודם טוענים דרך הכתובת של האתר (/fb/), כדי שחוסמי פרסומות או סינון של חברת הסלולר לא יחסמו.
+// אם זה לא עובד, טוענים ישירות מ-Google.
+const VER = '10.12.2';
+const NAMES = ['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js'];
+async function loadAll(base) { return Promise.all(NAMES.map(n => import(base + n))); }
+let mods;
+try { mods = await loadAll('/fb/'); }
+catch (e) {
+  console.warn('[LeafLoop] /fb/ failed, trying gstatic', e);
+  mods = await loadAll(`https://www.gstatic.com/firebasejs/${VER}/`);
+}
+const [A, U, F] = mods;
+export const { initializeApp } = A;
+export const {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup
-} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-export {
+} = U;
+export const {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where,
   getDocs, onSnapshot, orderBy, limit, increment, arrayUnion, arrayRemove, writeBatch, getCountFromServer
-} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+} = F;

@@ -544,3 +544,12 @@ input,textarea,select{font-size:16px}
 .mode-pill{padding:6px 12px;border-radius:999px;font-size:13px;font-weight:700}
 .req.done{opacity:.6;border-color:var(--line)}
 .admin-search{margin:0 14px;box-shadow:none;border:2px solid var(--line)}
+
+/* מסך "לא נטען" (במקום מסך ריק) */
+.boot-fail{min-height:90dvh;display:flex;flex-direction:column;justify-content:center;gap:12px;padding:28px 22px;text-align:center}
+.bf-logo{font-family:var(--font-d);font-weight:900;font-size:40px;direction:ltr;color:var(--jungle)}
+.bf-logo span{color:var(--hibiscus)}
+.boot-fail h2{font-size:24px}
+.boot-fail p{color:var(--muted);margin:0 0 6px}
+.boot-fail details{margin-top:12px;text-align:start;font-size:12px;color:var(--muted)}
+.boot-fail pre{white-space:pre-wrap;word-break:break-all;direction:ltr;text-align:left;background:var(--card);padding:10px;border-radius:12px}

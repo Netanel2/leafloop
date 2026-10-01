@@ -42,9 +42,32 @@ async function turnServers(env) {
   return [];
 }
 
+const FB_VER = '10.12.2';
+// Firebase דרך הכתובת שלנו, כדי שחוסמים לא יחסמו את האפליקציה
+async function firebaseFile(url, ctx) {
+  const file = url.pathname.slice(4);
+  if (!/^firebase-(app|auth|firestore)\.js$/.test(file)) return new Response('not found', { status: 404 });
+  const cache = caches.default, key = new Request(url.origin + '/fb/' + FB_VER + '/' + file);
+  let res = await cache.match(key);
+  if (res) return res;
+  const up = await fetch(`https://www.gstatic.com/firebasejs/${FB_VER}/${file}`);
+  if (!up.ok) return new Response('upstream error', { status: 502 });
+  const txt = (await up.text()).split(`https://www.gstatic.com/firebasejs/${FB_VER}/`).join('/fb/');
+  res = new Response(txt, { headers: { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400' } });
+  ctx.waitUntil(cache.put(key, res.clone()));
+  return res;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith('/fb/')) return firebaseFile(url, ctx);
+    // דיווחי תקלות מהטלפונים של המשתמשים. מופיעים ב-Cloudflare > leafloop > Logs
+    if (url.pathname === '/api/log' && request.method === 'POST') {
+      const body = (await request.text()).slice(0, 5000);
+      console.log('CLIENT_REPORT', body);
+      return new Response(null, { status: 204 });
+    }
     if (url.pathname === '/api/turn') {
       const origin = request.headers.get('Origin');
       if (origin && new URL(origin).host !== url.host) return new Response('forbidden', { status: 403 });

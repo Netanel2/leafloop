@@ -443,7 +443,9 @@ function refreshBadges() {
 // =====================================================
 // מסכי פתיחה
 // =====================================================
+const markBooted = () => { window.__llBooted = true; };
 function renderSetup() {
+  markBooted();
   $('#view').innerHTML = `<div class="ob"><div class="ob-hero"><div class="wordmark">Leaf<span>Loop</span></div><p>כמעט מוכן!</p></div>
   <h2>צריך לחבר את Firebase</h2>
   <p class="muted">האפליקציה עובדת, אבל עוד לא מחוברת למסד הנתונים. פתחו את הקובץ <b>firebase-config.js</b> והדביקו בו את הפרטים מ-Firebase. ההוראות המלאות נמצאות בקובץ README.</p></div>`;
@@ -453,6 +455,7 @@ function renderLoading(msg) {
   $('#view').innerHTML = `<div class="loading"><div class="wordmark">Leaf<span>Loop</span></div><span class="spin big"></span>${msg ? `<p class="muted">${msg}</p>` : ''}</div>`;
 }
 function renderLanding() {
+  markBooted();
   $('#view').innerHTML = `<div class="landing">
     <div class="ob-hero land-hero"><div class="wordmark">Leaf<span>Loop</span></div><p>הצמחים שלך מחפשים אחד את השני.</p></div>
     <ol class="how">
@@ -467,6 +470,7 @@ function renderLanding() {
 }
 let ob = null;
 function renderOnboarding() {
+  markBooted();
   if (!ob) ob = { step: 1, name: (S.me.displayName || '').split(' ')[0], color: AV_COLORS[0], city: '', lat: null, lng: null, radius: 10, wish: [] };
   const steps = `<div class="steps">${[1, 2, 3].map(i => `<i class="${i <= ob.step ? 'on' : ''}"></i>`).join('')}</div>`;
   let body = '';
@@ -556,7 +560,7 @@ async function startSession() {
   await loadMyNursery();
   try { await loadPool(true); } catch (e) { errLog(e); toast('לא הצלחנו לטעון צמחים. בדקו את החיבור לאינטרנט.'); }
   await Promise.race([S.matchesReady, new Promise(r => setTimeout(r, 4000))]);
-  S.booted = true;
+  S.booted = true; markBooted();
   updateDoc(doc(db, 'users', uid()), { lastSeen: Date.now() }).catch(errLog);
 }
 async function loadPool(force) {
@@ -2458,6 +2462,7 @@ else {
       S.profile = { id: user.uid, ...snap.data() };
       if (S.profile.banned && !isAdmin()) {
         $('#tabbar').style.display = 'none';
+        markBooted();
         $('#view').innerHTML = `<div class="empty" style="padding-top:25vh"><h3>החשבון הושעה</h3><p>החשבון הושעה בעקבות דיווח. אם נראה לכם שזו טעות, כתבו ל-<a href="mailto:${ADMIN_EMAILS[0]}">${ADMIN_EMAILS[0]}</a>.</p><button class="btn ghost sm" data-a="signOut" style="margin:12px auto 0">התנתקות</button></div>`;
         return;
       }
@@ -2465,6 +2470,7 @@ else {
       route();
     } catch (e) {
       errLog(e);
+      markBooted(); window.__llReport && window.__llReport('server');
       $('#view').innerHTML = `<div class="empty" style="padding-top:30vh"><h3>לא הצלחנו להתחבר לשרת</h3><p>בדקו את החיבור לאינטרנט ונסו שוב.</p><button class="btn hot sm" data-a="reload" style="margin:auto">ניסיון חוזר</button></div>`;
     }
   });
