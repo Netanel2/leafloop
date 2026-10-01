@@ -61,6 +61,7 @@ const AV_COLORS = ['#FF2E7E', '#FFB21C', '#0FB5B2', '#FF6A3D', '#B44CFF', '#19A5
 const QUICK = ['מתאים לך להחליף?', 'איפה נוח לך להיפגש?', 'אני יכול/ה היום', 'מתאים מחר?', 'אפשר תמונה נוספת של הצמח?'];
 const REPORT_REASONS = ['הטרדה או התנהגות פוגענית', 'ספאם או הונאה', 'תוכן לא הולם', 'לא הגיע/ה למפגש', 'אחר'];
 const MODE = { swap: { t: 'להחלפה', i: '🔄', c: 'm-swap' }, gift: { t: 'במתנה', i: '🎁', c: 'm-gift' }, both: { t: 'מתנה או החלפה', i: '💚', c: 'm-both' } };
+const MODE_ACT = { swap: 'להחליף', gift: 'למסור במתנה', both: 'גם וגם' };
 const MODE_HINT = { swap: 'בתמורה לצמח אחר', gift: 'בלי תמורה, למי שירצה', both: 'מה שמתאים לצד השני' };
 const modeOf = p => (p && MODE[p.mode] ? p.mode : 'swap');
 // מי רואה את פאנל הניהול של המשתלות (חייב להתאים לכתובת ב-firestore.rules)
@@ -604,23 +605,26 @@ VIEWS.discover = function () {
   const people = [...new Set(S.pool.filter(p => dist(p) <= R && !isBlocked(p.ownerId)).map(p => p.ownerId))].map(id => S.users[id]).filter(Boolean).sort((a, b) => dist(a) - dist(b)).slice(0, 20);
   const nurs = S.nurseries.filter(n => n.active && dist(n) <= Math.max(R, 30)).sort((a, b) => dist(a) - dist(b)).slice(0, 12);
   const n = notifList().filter(x => x.unread).length;
-  const askLive = !S.here && liveOn() && lsGet('ll_live_ask') !== '0' && !!navigator.geolocation;
+  const canLive = !S.here && liveOn() && !!navigator.geolocation;
   $('#view').innerHTML = `
-  <header class="hero">
-    <div class="row sb"><h1>${greeting()},<br>${esc(S.profile.name)}</h1>
-    <button class="icon-btn" data-a="notifs" aria-label="התראות">${ic('bell', 24)}<span class="dot" id="bell-dot" style="${n ? '' : 'display:none'}">${n}</span></button></div>
-    <button class="loc" data-a="filters">${ic('pin', 18)} ${esc(locLabel())}, ${radiusLabel(R)}</button>
-  </header>
-  <div class="deck-wrap">
-    <div class="deck-meta"><span id="deck-count"></span>
-      <span class="row" style="gap:14px"><button data-a="refresh" class="row" style="color:#fff;gap:4px" aria-label="רענון">${ic('refresh', 18)}</button><button data-a="filters" class="row" style="color:#fff;gap:4px">${ic('filter', 18)} סינון</button></span></div>
-    ${askLive ? `<div class="live-ask"><button data-a="useLive">${ic('pin', 18)} להציג צמחים לפי המקום שבו אתם עכשיו?</button><button data-a="noLive" aria-label="לא תודה">${ic('x', 16)}</button></div>` : ''}
-    <section class="deck" id="deck" aria-label="כרטיסי צמחים"></section>
+  <div class="disc">
+    <header class="hero2">
+      <div class="hrow"><h1>${greeting()}, ${esc(S.profile.name)}</h1>
+        <button class="icon-btn" data-a="notifs" aria-label="התראות">${ic('bell', 22)}<span class="dot" id="bell-dot" style="${n ? '' : 'display:none'}">${n}</span></button></div>
+      <div class="hrow2">
+        <button class="loc" data-a="filters">${ic('pin', 16)} ${esc(locLabel())}, ${radiusLabel(R)}</button>
+        ${canLive ? `<button class="live-pill" data-a="useLive">${ic('pin', 14)} איפה אני?</button>` : ''}
+        <span class="sp"></span>
+        <button class="hbtn" data-a="refresh" aria-label="רענון">${ic('refresh', 18)}</button>
+        <button class="hbtn" data-a="filters">${ic('filter', 18)} סינון</button>
+      </div>
+    </header>
+    <div class="deck-area"><span class="hcount" id="deck-count"></span><section class="deck" id="deck" aria-label="כרטיסי צמחים"></section></div>
     <div class="actions" id="deck-actions">
       <button class="act undo" data-a="undo" aria-label="ביטול ההחלקה האחרונה" ${lastSwipe ? '' : 'disabled'}>${ic('undo', 20)}</button>
-      <button class="act pass" data-a="decide" data-d="pass" aria-label="לא בשבילי">${ic('x', 30)}</button>
-      <button class="act like" data-a="decide" data-d="like" aria-label="מעוניין">${ic('heart', 34)}</button>
-      <button class="act super" data-a="decide" data-d="super" aria-label="סופר מעוניין">${ic('star', 28)}</button>
+      <button class="act pass" data-a="decide" data-d="pass" aria-label="לא בשבילי">${ic('x', 28)}</button>
+      <button class="act like" data-a="decide" data-d="like" aria-label="מעוניין">${ic('heart', 32)}</button>
+      <button class="act super" data-a="decide" data-d="super" aria-label="סופר מעוניין">${ic('star', 26)}</button>
       <button class="act save" data-a="decide" data-d="save" aria-label="שמירה לאחר כך">${ic('bookmark', 20)}</button>
     </div>
   </div>
@@ -682,7 +686,7 @@ function renderDeck() {
   const deck = $('#deck'); if (!deck) return;
   const list = deckItems();
   const plantsN = list.filter(x => x.k === 'plant').length;
-  $('#deck-count').textContent = plantsN ? `${plantsN} צמחים באזור` : '';
+  $('#deck-count').textContent = plantsN ? (plantsN === 1 ? 'צמח אחד באזור' : `${plantsN} צמחים באזור`) : '';
   $('#deck-actions').classList.toggle('hidden', !list.length);
   const undo = $('[data-a=undo]'); if (undo) undo.disabled = !lastSwipe;
   if (!list.length) {
@@ -784,7 +788,7 @@ function openRequestSheet(p, u, sup) {
     return;
   }
   if (mode === 'swap' && !myAvail().length) {
-    sheet(`<h3>עוד אין לך צמחים להציע</h3><p class="muted">${esc(u.name)} מחפש/ת החלפה. כדי לשלוח הצעה, הוסיפו קודם צמח אחד לפחות.</p><button class="btn hot" data-a="open" data-to="add">הוספת צמח</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
+    sheet(`<h3>עוד אין לך צמחים להציע</h3><p class="muted">${esc(u.name)} מחפש/ת החלפה. כדי לשלוח הצעה, הוסיפו קודם צמח אחד לפחות. אם ${esc(u.name)} ישנה/תשנה את המודעה ל"גם וגם" או "במתנה", תוכלו לבקש גם בלי להציע.</p><button class="btn hot" data-a="open" data-to="add">הוספת צמח</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
     return;
   }
   const wanted = theyWantMine(u).map(x => x.id);
@@ -898,7 +902,7 @@ VIEWS.plant = async function (id) {
     ${mine || modeOf(p) === 'gift' ? '' : `<p class="label">${modeOf(p) === 'both' ? 'אם תרצו להציע משהו בתמורה' : `${esc(u.name)} רוצה בתמורה`}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
     <p class="label">מסירה</p><div class="chips"><span class="chip">${DELIV[p.delivery] || ''}</span><span class="chip">${ic('shield', 14)} מפגש במקום ציבורי</span></div>
     <div style="margin-top:22px">
-    ${mine ? `<button class="btn ghost" data-a="myPlantSheet" data-id="${p.id}">ניהול הצמח</button>`
+    ${mine ? `<button class="btn hot" data-a="myPlantSheet" data-id="${p.id}">✏️ עריכת המודעה</button>`
       : m ? `<button class="btn primary" data-a="open" data-to="chat/${m.id}">${ic('chat')} מעבר לצ'אט</button>`
         : `<button class="btn hot" data-a="likeDetail" data-id="${p.id}">${modeOf(p) === 'gift' ? '🎁 אשמח לקבל' : ic('heart') + ' מעוניין'}</button>
            <button class="btn ghost" data-a="toggleSave" data-id="${p.id}">${ic('bookmark')} ${saved ? 'הסרה מהשמורים' : 'שמירה לאחר כך'}</button>`}
@@ -1162,7 +1166,7 @@ VIEWS.profile = function () {
     ${avatar(u)}<h1>${esc(u.name)}</h1><div>${icInline('pin')} ${esc(u.city)}</div></header>
   <div class="stats"><div class="stat"><b>${u.swaps || 0}</b><span>החלפות</span></div><div class="stat"><b>${u.rehomed || 0}</b><span>צמחים שמצאו בית</span></div><div class="stat"><b>${u.ratingCount ? Number(u.ratingAvg).toFixed(1) : '–'}</b><span>${u.ratingCount ? `דירוג (${u.ratingCount})` : 'עוד אין דירוג'}</span></div></div>
   <h2 class="section-t">הצמחים שלי</h2>
-  ${S.myPlants.length ? `<div class="grid">${S.myPlants.map(p => `<button class="mini ${p.available ? '' : 'off'}" data-a="myPlantSheet" data-id="${p.id}"><div class="mv">${visual(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}${p.available ? '' : ', לא זמין'}</div></div></button>`).join('')}</div>`
+  ${S.myPlants.length ? `<div class="grid">${S.myPlants.map(p => `<button class="mini ${p.available ? '' : 'off'}" data-a="myPlantSheet" data-id="${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}${p.available ? '' : ', לא זמין'}</div></div></button>`).join('')}</div>`
       : `<div class="empty"><p>עוד לא הוספתם צמחים.</p><button class="btn hot sm" data-a="open" data-to="add" style="margin:auto">הוספת צמח</button></div>`}
   <h2 class="section-t">רשימת המשאלות</h2>
   <div class="addwish"><input class="field" id="wish-in" data-suggest="wish" placeholder="איזה צמח אתם מחפשים?" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWish">הוספה</button></div>
@@ -1211,9 +1215,17 @@ function settingsSheet() {
 }
 function myPlantSheet(id) {
   const p = S.myPlants.find(x => x.id === id); if (!p) return;
-  sheet(`<div class="row" style="margin-bottom:10px"><span class="thumb" style="width:64px;height:64px">${visual(p)}</span><div><h3 style="margin:0">${esc(pName(p))}</h3><div class="small muted">${OFFER[p.offer]}, ${COND[p.condition]}, כמות ${p.qty}</div></div></div>
-  <label class="toggle"><span><b>זמין להחלפה</b><br><span class="small muted">כשזה כבוי, הצמח לא מופיע לאחרים.</span></span><input type="checkbox" data-change="avail" data-id="${p.id}" ${p.available ? 'checked' : ''}></label>
-  <label class="toggle"><span><b>פתוח/ה להצעות</b></span><input type="checkbox" data-change="popen" data-id="${p.id}" ${p.open ? 'checked' : ''}></label>
+  const m = modeOf(p);
+  const chips = (k, obj) => `<div class="chips" style="gap:8px">${Object.entries(obj).map(([kk, v]) => `<button class="sel ${p[k] === kk ? 'on' : ''}" data-a="editPlant" data-id="${p.id}" data-k="${k}" data-v="${kk}">${v}</button>`).join('')}</div>`;
+  sheet(`<div class="row" style="margin-bottom:6px"><span class="thumb" style="width:60px;height:60px">${visual(p)}</span><div><h3 style="margin:0">${esc(pName(p))}</h3><div class="small muted">כל שינוי נשמר מיד</div></div></div>
+  <p class="label">מה תרצו לעשות איתו?</p>
+  <div class="modes">${Object.entries(MODE).map(([k, mm]) => `<button class="mode-opt ${mm.c} ${m === k ? 'on' : ''}" data-a="editPlant" data-id="${p.id}" data-k="mode" data-v="${k}"><i>${mm.i}</i><b>${MODE_ACT[k]}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
+  <p class="label">מה אתם מציעים?</p>${chips('offer', OFFER)}
+  <p class="label">מצב הצמח</p>${chips('condition', COND)}
+  <p class="label">כמות</p><div class="stepper"><button data-a="editQty" data-id="${p.id}" data-v="1" aria-label="יותר">+</button><b id="edit-qty">${p.qty || 1}</b><button data-a="editQty" data-id="${p.id}" data-v="-1" aria-label="פחות">−</button></div>
+  <p class="label">מסירה</p>${chips('delivery', DELIV)}
+  <label class="toggle"><span><b>זמין</b><br><span class="small muted">כשזה כבוי, הצמח לא מופיע לאחרים.</span></span><input type="checkbox" data-change="avail" data-id="${p.id}" ${p.available ? 'checked' : ''}></label>
+  <label class="toggle"><span><b>פתוח/ה להצעות</b><br><span class="small muted">גם על צמחים שלא ברשימת המשאלות שלכם.</span></span><input type="checkbox" data-change="popen" data-id="${p.id}" ${p.open ? 'checked' : ''}></label>
   <button class="btn ghost danger" data-a="delPlant" data-id="${p.id}" style="margin-top:14px">${ic('trash')} מחיקת הצמח</button>`);
 }
 function notifsSheet() {
@@ -1545,7 +1557,7 @@ const A = {
   },
 
   // מיקום
-  useLive: () => { lsSet('ll_live', '1'); locate(true); const b = $('.live-ask'); if (b) b.remove(); },
+  useLive: el => { lsSet('ll_live', '1'); busy(el, true, ''); locate(true); setTimeout(() => busy(el, false), 4000); },
   noLive: () => { lsSet('ll_live_ask', '0'); const b = $('.live-ask'); if (b) b.remove(); },
 
   // משתלות
@@ -1706,6 +1718,22 @@ const A = {
     } catch (e) { errLog(e); toast('לא הצלחנו להסיר. נסו שוב.'); }
   },
   myPlantSheet: el => myPlantSheet(el.dataset.id),
+  editPlant: el => {
+    const p = S.myPlants.find(x => x.id === el.dataset.id); if (!p) return;
+    const k = el.dataset.k, v = el.dataset.v;
+    if (p[k] === v) return;
+    const prev = p[k]; p[k] = v;
+    $$(`#sheet [data-a=editPlant][data-k=${k}]`).forEach(b => b.classList.toggle('on', b === el));
+    updateDoc(doc(db, 'plants', p.id), { [k]: v })
+      .then(() => toast(k === 'mode' ? `עודכן: ${MODE[v].i} ${MODE[v].t}` : 'עודכן ✓'))
+      .catch(e => { errLog(e); p[k] = prev; toast('השמירה לא הצליחה. נסו שוב.'); myPlantSheet(p.id); });
+  },
+  editQty: el => {
+    const p = S.myPlants.find(x => x.id === el.dataset.id); if (!p) return;
+    const q = Math.max(1, Math.min(99, (p.qty || 1) + +el.dataset.v)); if (q === p.qty) return;
+    p.qty = q; $('#edit-qty').textContent = q;
+    clearTimeout(A._qT); A._qT = setTimeout(() => updateDoc(doc(db, 'plants', p.id), { qty: q }).then(() => toast('עודכן ✓')).catch(errLog), 600);
+  },
   delPlant: async el => {
     const p = S.myPlants.find(x => x.id === el.dataset.id); if (!p) return;
     if (!confirm(`למחוק את ה${pName(p)}? אי אפשר לבטל את זה.`)) return;
