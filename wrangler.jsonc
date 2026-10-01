@@ -1,7 +1,5 @@
 {
   "name": "leafloop",
-  "compatibility_date": "2026-09-25",
-  "assets": {
-    "directory": "."
-  }
+  "compatibility_date": "2025-09-01",
+  "assets": { "directory": "./" }
 }

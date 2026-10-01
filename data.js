@@ -1,5 +1,5 @@
-// ===== נתונים: קטלוג צמחים, ערים ומשתמשי הדגמה =====
-// אפשר לערוך את הקובץ הזה כדי להוסיף צמחים, ערים או משתמשים לדוגמה.
+// ===== נתונים קבועים: קטלוג צמחים וערים =====
+// אפשר לערוך את הקובץ הזה כדי להוסיף צמחים או ערים.
 
 const CITIES = [
   { n: 'כפר סבא', lat: 32.175, lng: 34.907 },
@@ -53,79 +53,5 @@ const CATALOG = [
 // מקומות מפגש ציבוריים מומלצים (מוצגים לפי העיר של המשתמש)
 const SAFE_SPOTS = ['הקניון המרכזי', 'בית קפה ברחוב הראשי', 'הפארק העירוני', 'המרכז הקהילתי', 'הספרייה העירונית', 'משתלה מקומית'];
 
-// משתמשי הדגמה – כדי שיהיה עם מי להחליף לפני שיש משתמשים אמיתיים
-const DEMO_USERS = [
-  { id: 'maya', name: 'מאיה', city: 'כפר סבא', lat: 32.182, lng: 34.915, rating: 4.9, swaps: 27, open: true, color: '#FF2E7E',
-    wish: ['monstera', 'pothos', 'hoya'],
-    plants: [
-      { id: 'p_maya_1', catId: 'birkin', offer: 'cutting', condition: 'young', qty: 2, delivery: 'pickup' },
-      { id: 'p_maya_2', catId: 'alocasia', offer: 'full', condition: 'mature', qty: 1, delivery: 'pickup' }
-    ] },
-  { id: 'daniel', name: 'דניאל', city: 'רעננה', lat: 32.190, lng: 34.875, rating: 4.7, swaps: 9, open: false, color: '#0FB5B2',
-    wish: ['hoya', 'calathea'],
-    plants: [
-      { id: 'p_daniel_1', catId: 'string_pearls', offer: 'seedling', condition: 'young', qty: 1, delivery: 'both' },
-      { id: 'p_daniel_2', catId: 'pilea', offer: 'full', condition: 'mature', qty: 1, delivery: 'pickup' }
-    ] },
-  { id: 'ron', name: 'רון', city: 'הוד השרון', lat: 32.155, lng: 34.892, rating: 5.0, swaps: 14, open: true, color: '#FFB21C',
-    wish: ['aloe', 'philodendron'],
-    plants: [
-      { id: 'p_ron_1', catId: 'monstera_albo', offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup' },
-      { id: 'p_ron_2', catId: 'snake', offer: 'full', condition: 'large', qty: 1, delivery: 'pickup' }
-    ] },
-  { id: 'noa', name: 'נועה', city: 'כפר סבא', lat: 32.168, lng: 34.900, rating: 4.8, swaps: 5, open: true, color: '#B44CFF',
-    wish: ['pothos', 'basil'],
-    plants: [
-      { id: 'p_noa_1', catId: 'calathea', offer: 'full', condition: 'mature', qty: 1, delivery: 'pickup' },
-      { id: 'p_noa_2', catId: 'anthurium', offer: 'full', condition: 'mature', qty: 1, delivery: 'both' }
-    ] },
-  { id: 'omer', name: 'עומר', city: 'הרצליה', lat: 32.162, lng: 34.840, rating: 4.6, swaps: 21, open: true, color: '#FF6A3D',
-    wish: ['ficus', 'bird'],
-    plants: [
-      { id: 'p_omer_1', catId: 'echeveria', offer: 'seedling', condition: 'young', qty: 3, delivery: 'shipping' },
-      { id: 'p_omer_2', catId: 'opuntia', offer: 'cutting', condition: 'mature', qty: 2, delivery: 'pickup' }
-    ] },
-  { id: 'shira', name: 'שירה', city: 'תל אביב', lat: 32.080, lng: 34.780, rating: 4.9, swaps: 33, open: false, color: '#19A55B',
-    wish: ['begonia', 'monstera'],
-    plants: [
-      { id: 'p_shira_1', catId: 'philodendron', offer: 'cutting', condition: 'young', qty: 3, delivery: 'both' },
-      { id: 'p_shira_2', catId: 'hoya', offer: 'cutting', condition: 'young', qty: 2, delivery: 'shipping' },
-      { id: 'p_shira_3', catId: 'tradescantia', offer: 'cutting', condition: 'young', qty: 4, delivery: 'both' }
-    ] },
-  { id: 'yossi', name: 'יוסי', city: 'נתניה', lat: 32.320, lng: 34.855, rating: 4.5, swaps: 3, open: true, color: '#FFB21C',
-    wish: ['lemon', 'olive'],
-    plants: [
-      { id: 'p_yossi_1', catId: 'tomato', offer: 'seeds', condition: 'young', qty: 20, delivery: 'shipping' },
-      { id: 'p_yossi_2', catId: 'rosemary', offer: 'seedling', condition: 'young', qty: 2, delivery: 'pickup' },
-      { id: 'p_yossi_3', catId: 'lavender', offer: 'full', condition: 'mature', qty: 1, delivery: 'pickup' }
-    ] },
-  { id: 'lior', name: 'ליאור', city: 'פתח תקווה', lat: 32.090, lng: 34.885, rating: 4.8, swaps: 12, open: true, color: '#0FB5B2',
-    wish: ['aloe', 'zz'],
-    plants: [
-      { id: 'p_lior_1', catId: 'bird', offer: 'full', condition: 'large', qty: 1, delivery: 'pickup' },
-      { id: 'p_lior_2', catId: 'spider', offer: 'cutting', condition: 'young', qty: 3, delivery: 'both' }
-    ] },
-  { id: 'tal', name: 'טל', city: 'רעננה', lat: 32.178, lng: 34.862, rating: 4.9, swaps: 18, open: true, color: '#FF2E7E',
-    wish: ['string_pearls', 'mammillaria'],
-    plants: [
-      { id: 'p_tal_1', catId: 'begonia', offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup' },
-      { id: 'p_tal_2', catId: 'zz', offer: 'full', condition: 'mature', qty: 1, delivery: 'pickup' }
-    ] },
-  { id: 'avigail', name: 'אביגיל', city: 'כפר סבא', lat: 32.172, lng: 34.925, rating: 4.7, swaps: 7, open: true, color: '#B44CFF',
-    wish: ['monstera', 'lavender'],
-    plants: [
-      { id: 'p_avigail_1', catId: 'string_pearls', offer: 'cutting', condition: 'young', qty: 2, delivery: 'pickup' },
-      { id: 'p_avigail_2', catId: 'mint', offer: 'cutting', condition: 'young', qty: 5, delivery: 'pickup' }
-    ] }
-];
-
-// תשובות אוטומטיות בצ'אט ההדגמה
-const BOT_REPLIES = [
-  'נשמע מעולה!',
-  'מתאים לי. מתי נוח לך?',
-  'אפשר להיפגש בפארק העירוני, מה דעתך?',
-  'אני יכול/ה מחר אחר הצהריים.',
-  'יש לי גם ייחור קטן נוסף אם תרצה/י 🌿',
-  'סגור, נתראה שם!',
-  'תודה! אשלח תמונה של הצמח בקרוב.'
-];
+// צמחים פופולריים להצעה מהירה ברשימת המשאלות בהרשמה
+const POPULAR = ['monstera', 'monstera_albo', 'pothos', 'philodendron', 'string_pearls', 'hoya', 'calathea', 'alocasia', 'aloe', 'snake', 'ficus', 'basil'];

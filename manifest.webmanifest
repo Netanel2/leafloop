@@ -1,1 +1,21 @@
-{"name":"LeafMatch – החלפת צמחים","short_name":"LeafMatch","lang":"he","dir":"rtl","start_url":"./","display":"standalone","background_color":"#EFFBF1","theme_color":"#073B2A","icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml"}]}
+{
+  "name": "LeafLoop – החלפת צמחים",
+  "short_name": "LeafLoop",
+  "description": "מחליפים צמחים, ייחורים וזרעים עם אנשים באזור.",
+  "lang": "he",
+  "dir": "rtl",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#073B2A",
+  "theme_color": "#073B2A",
+  "categories": ["lifestyle", "social"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
