@@ -1,77 +1,197 @@
 rules_version = '2';
-// כללי האבטחה של LeafLoop. מדביקים את כל הקובץ הזה ב-Firebase > Firestore > Rules ולוחצים Publish.
+// כללי האבטחה של LeafLoop.
+// מדביקים את כל הקובץ ב-Firebase > Firestore > Rules ולוחצים Publish.
+// הכללים האלה נאכפים בשרת של Google, ולכן אי אפשר לעקוף אותם גם אם כותבים ישר למסד הנתונים.
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ---------- עזרים ----------
     function signed() { return request.auth != null; }
     function me() { return request.auth.uid; }
-    function matchUsers(id) { return get(/databases/$(database)/documents/matches/$(id)).data.users; }
     function email() { return request.auth.token.email.lower(); }
-    // מנהל האפליקציה (אותו אימייל כמו ADMIN_EMAILS ב-app.js)
     function isAdmin() { return signed() && request.auth.token.email_verified == true && email() in ['netanelkk9@gmail.com']; }
-    function ownsNursery(nid) { return get(/databases/$(database)/documents/nurseries/$(nid)).data.ownerEmail == email(); }
+    function userDoc(u) { return get(/databases/$(database)/documents/users/$(u)); }
+    function plantDoc(id) { return get(/databases/$(database)/documents/plants/$(id)); }
+    function matchData(id) { return get(/databases/$(database)/documents/matches/$(id)).data; }
+    function notBanned() {
+      return !exists(/databases/$(database)/documents/users/$(me())) || userDoc(me()).data.get('banned', false) == false;
+    }
+    function blockedEither(a, b) {
+      return exists(/databases/$(database)/documents/blocks/$(a + '_' + b)) || exists(/databases/$(database)/documents/blocks/$(b + '_' + a));
+    }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function okId(id) { return id.matches('^[A-Za-z0-9_-]{1,700}$'); }
+    function score(v) { return v is int && v >= 1 && v <= 5; }
+    function strMax(d, k, n) { return !(k in d) || d[k] == null || (d[k] is string && d[k].size() <= n); }
+    // שדות שרק המערכת או המנהל קובעים (מוניטין והשעיה)
+    function lockedUserKeys() { return ['banned', 'ratingAvg', 'ratingCount', 'swaps', 'rehomed']; }
 
-    // פרופילים: כולם רואים, רק הבעלים משנה
+    // ---------- פרופילים ----------
     match /users/{uid} {
       allow read: if signed();
-      allow create: if signed() && me() == uid && request.resource.data.get('banned', false) == false;
-      // המשתמש מעדכן את עצמו, אבל לא יכול לבטל השעיה. המנהל יכול רק להשעות או לבטל השעיה.
-      allow update: if (signed() && me() == uid && request.resource.data.get('banned', false) == resource.data.get('banned', false))
-        || (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['banned']));
+      allow create: if signed() && me() == uid && !request.resource.data.keys().hasAny(lockedUserKeys())
+        && strMax(request.resource.data, 'name', 40);
+      // המשתמש מעדכן את עצמו, אבל לא את ההשעיה ולא את נתוני המוניטין. המנהל יכול רק להשעות או לבטל השעיה.
+      allow update: if (signed() && me() == uid && !changed().hasAny(lockedUserKeys()) && strMax(request.resource.data, 'name', 40))
+        || (isAdmin() && changed().hasOnly(['banned']));
       allow delete: if signed() && me() == uid;
-      // מידע פרטי (החלקות, שמורים, חסומים): רק הבעלים
       match /private/{docId} {
         allow read, write: if signed() && me() == uid;
       }
     }
 
-    // צמחים ותמונות: כולם רואים, רק הבעלים כותב
+    // ---------- צמחים ותמונות ----------
+    function validPlant(d) {
+      return d.ownerId == me() && d.catId is string && d.catId.size() > 0 && d.catId.size() <= 60
+        && d.get('mode', 'swap') in ['swap', 'gift', 'both', 'sale']
+        && (d.get('mode', 'swap') != 'sale' || (d.get('price', null) is int && d.price > 0 && d.price <= 100000))
+        && (d.get('thumb', null) == null || (d.thumb is string && d.thumb.size() < 200000))
+        && strMax(d, 'ownerName', 40);
+    }
     match /plants/{id} {
       allow read: if signed();
-      allow create: if signed() && request.resource.data.ownerId == me();
-      allow update: if signed() && resource.data.ownerId == me() && request.resource.data.ownerId == me();
+      allow create: if signed() && notBanned() && okId(id) && validPlant(request.resource.data);
+      allow update: if signed() && resource.data.ownerId == me() && notBanned() && validPlant(request.resource.data);
       allow delete: if signed() && resource.data.ownerId == me();
     }
     match /photos/{id} {
       allow read: if signed();
-      allow create: if signed() && request.resource.data.ownerId == me();
-      allow update, delete: if signed() && resource.data.ownerId == me();
+      allow create, update: if signed() && notBanned() && request.resource.data.ownerId == me()
+        && getAfter(/databases/$(database)/documents/plants/$(id)).data.ownerId == me()
+        && request.resource.data.img is string && request.resource.data.img.size() < 900000;
+      allow delete: if signed() && resource.data.ownerId == me();
     }
 
-    // לייקים: רואים רק מי שעשה ומי שקיבל
+    // ---------- לייקים ----------
     match /likes/{id} {
       allow read: if signed() && (resource.data.from == me() || resource.data.to == me());
-      allow create, update: if signed() && request.resource.data.from == me();
-      allow delete: if signed() && resource.data.from == me();
+      allow create, update: if signed() && notBanned() && request.resource.data.from == me()
+        && id == me() + '_' + request.resource.data.plantId
+        && plantDoc(request.resource.data.plantId).data.ownerId == request.resource.data.to
+        && request.resource.data.to != me();
+      allow delete: if signed() && (resource.data.from == me() || resource.data.to == me());
     }
 
-    // התאמות וצ'אט: רק שני המשתתפים
+    // ---------- התאמות ----------
+    function otherOf(users) { return users[0] == me() ? users[1] : users[0]; }
+    // התאמה מלייק: אני עשיתי לייק לצמח שלו, והוא עשה לייק לצמח שלי, או ששנינו מחפשים את הצמח של השני
+    function likeBasis(d) {
+      let o = otherOf(d.users);
+      let mine = d.give[me()];
+      let theirs = d.give[o];
+      return mine.size() == 1 && theirs.size() == 1
+        && plantDoc(mine[0]).data.ownerId == me()
+        && plantDoc(theirs[0]).data.ownerId == o
+        && exists(/databases/$(database)/documents/likes/$(me() + '_' + theirs[0]))
+        && (exists(/databases/$(database)/documents/likes/$(o + '_' + mine[0]))
+          || (userDoc(o).data.get('wishlist', []).hasAny([plantDoc(mine[0]).data.catId])
+            && userDoc(me()).data.get('wishlist', []).hasAny([plantDoc(theirs[0]).data.catId])));
+    }
+    // התאמה מפנייה: רק מי שקיבל את הפנייה, אחרי שאישר אותה, ובדיוק עם מה שהוצע בה
+    function reqBasis(d) {
+      let r = get(/databases/$(database)/documents/requests/$(d.reqId)).data;
+      return r.to == me() && r.from == otherOf(d.users) && r.status == 'accepted'
+        && d.give[me()] == [r.target] && d.give[otherOf(d.users)] == r.offer;
+    }
     match /matches/{id} {
       allow read: if isAdmin() || (signed() && (resource == null || me() in resource.data.users));
-      allow create: if signed() && me() in request.resource.data.users && request.resource.data.users.size() == 2;
-      allow update: if signed() && me() in resource.data.users && request.resource.data.users == resource.data.users;
+      allow create: if signed() && notBanned() && okId(id)
+        && request.resource.data.users.size() == 2 && me() in request.resource.data.users
+        && request.resource.data.users[0] != request.resource.data.users[1]
+        && request.resource.data.status in ['discussing', 'agreed']
+        && request.resource.data.get('blockedBy', null) == null
+        && !blockedEither(request.resource.data.users[0], request.resource.data.users[1])
+        && ((request.resource.data.get('reqId', null) != null && reqBasis(request.resource.data))
+          || (request.resource.data.get('reqId', null) == null && likeBasis(request.resource.data)));
+      // אפשר לעדכן רק סטטוס, מפגש, הודעה אחרונה, מונה וכו'. אי אפשר לשנות מי משתתף ומה עובר, ואי אפשר לשנות את הפרטים של הצד השני.
+      allow update: if signed() && me() in resource.data.users
+        && changed().hasOnly(['status', 'meeting', 'lastMsg', 'lastAt', 'lastFrom', 'unread', 'rated', 'info', 'blockedBy'])
+        && request.resource.data.status in ['discussing', 'agreed', 'meeting', 'swapped', 'cancelled']
+        && request.resource.data.info[otherOf(resource.data.users)] == resource.data.info[otherOf(resource.data.users)]
+        && (resource.data.get('blockedBy', null) == null || resource.data.blockedBy == me())
+        && (request.resource.data.get('blockedBy', null) == null || request.resource.data.blockedBy == me());
+
       match /messages/{mid} {
-        allow read: if signed() && me() in matchUsers(id);
-        allow create: if signed() && request.resource.data.from == me() && me() in matchUsers(id);
+        allow read: if signed() && me() in matchData(id).users;
+        allow create: if signed() && notBanned() && request.resource.data.from == me()
+          && me() in matchData(id).users
+          && matchData(id).get('blockedBy', null) == null
+          && strMax(request.resource.data, 'text', 2000)
+          && (request.resource.data.get('audio', null) == null || (request.resource.data.audio is string && request.resource.data.audio.size() < 900000))
+          && (request.resource.data.get('img', null) == null || (request.resource.data.img is string && request.resource.data.img.size() < 900000));
       }
     }
 
-    // הצעות החלפה: רק השולח והמקבל
+    // ---------- פניות ----------
     match /requests/{id} {
       allow read: if isAdmin() || (signed() && (resource.data.from == me() || resource.data.to == me()));
-      allow create: if signed() && request.resource.data.from == me();
-      allow update: if signed() && (resource.data.from == me() || resource.data.to == me());
+      allow create: if signed() && notBanned() && request.resource.data.from == me()
+        && request.resource.data.to != me()
+        && request.resource.data.status == 'pending'
+        && plantDoc(request.resource.data.target).data.ownerId == request.resource.data.to
+        && plantDoc(request.resource.data.target).data.get('frozen', false) == false
+        && request.resource.data.offer is list && request.resource.data.offer.size() <= 6
+        && strMax(request.resource.data, 'msg', 400)
+        && !blockedEither(me(), request.resource.data.to);
+      // מי שקיבל: רק לאשר או לדחות, ואז לרשום את ההתאמה. מי ששלח: רק לסמן שראה את התשובה. אי אפשר לשנות מי שלח, למי, ומה הוצע.
+      allow update: if signed() && (
+        (resource.data.to == me() && resource.data.status == 'pending' && changed().hasOnly(['status'])
+          && request.resource.data.status in ['accepted', 'declined'])
+        || (resource.data.to == me() && resource.data.status == 'accepted' && changed().hasOnly(['matchId']))
+        || (resource.data.from == me() && changed().hasOnly(['seen'])));
+      allow delete: if signed() && (resource.data.from == me() || resource.data.to == me());
+    }
+
+    // ---------- חסימות ----------
+    match /blocks/{id} {
+      allow read: if signed() && resource.data.by == me();
+      allow create: if signed() && request.resource.data.by == me() && id == me() + '_' + request.resource.data.user;
+      allow delete: if signed() && resource.data.by == me();
+    }
+
+    // ---------- דירוגים: אחד לכל משתתף בכל החלפה שבוצעה ----------
+    match /reviews/{id} {
+      allow read: if signed();
+      allow create: if signed() && notBanned()
+        && id == request.resource.data.matchId + '_' + me()
+        && request.resource.data.from == me() && request.resource.data.to != me()
+        && me() in matchData(request.resource.data.matchId).users
+        && request.resource.data.to in matchData(request.resource.data.matchId).users
+        && matchData(request.resource.data.matchId).status == 'swapped'
+        && score(request.resource.data.comm) && score(request.resource.data.cond)
+        && score(request.resource.data.rel) && score(request.resource.data.all)
+        && strMax(request.resource.data, 'text', 500);
       allow delete: if signed() && resource.data.from == me();
     }
 
-    // דירוגים: רק מי שהשתתף בהחלפה יכול לדרג
-    match /reviews/{id} {
-      allow read: if signed();
-      allow create: if signed() && request.resource.data.from == me()
-        && me() in matchUsers(request.resource.data.matchId)
-        && request.resource.data.to in matchUsers(request.resource.data.matchId);
+    // ---------- דיווחים ----------
+    match /reports/{id} {
+      allow create: if signed() && request.resource.data.from == me() && request.resource.data.get('handled', false) == false
+        && strMax(request.resource.data, 'text', 1000);
+      allow read: if isAdmin();
+      allow update: if isAdmin() && changed().hasOnly(['handled']);
     }
 
-    // משתלות: כולם רואים. רק המנהל יוצר, מפעיל ומשהה. בעל/ת המשתלה מעדכן/ת פרטים.
+    // ---------- שיחות קוליות ----------
+    match /calls/{id} {
+      allow read: if isAdmin() || (signed() && (resource.data.from == me() || resource.data.to == me()));
+      allow create: if signed() && notBanned() && request.resource.data.from == me()
+        && request.resource.data.to != me()
+        && me() in matchData(request.resource.data.matchId).users
+        && request.resource.data.to in matchData(request.resource.data.matchId).users
+        && matchData(request.resource.data.matchId).get('blockedBy', null) == null
+        && request.resource.data.status == 'ringing';
+      allow update: if signed() && (resource.data.from == me() || resource.data.to == me())
+        && changed().hasOnly(['status', 'answer', 'acceptedAt', 'endedAt', 'dur']);
+      allow delete: if signed() && (resource.data.from == me() || resource.data.to == me());
+      match /cands/{cid} {
+        allow read, create: if signed() && (get(/databases/$(database)/documents/calls/$(id)).data.from == me()
+          || get(/databases/$(database)/documents/calls/$(id)).data.to == me());
+      }
+    }
+
+    // ---------- משתלות ----------
+    function ownsNursery(nid) { return get(/databases/$(database)/documents/nurseries/$(nid)).data.ownerEmail == email(); }
     match /nurseries/{id} {
       allow read: if signed();
       allow create, delete: if isAdmin();
@@ -79,42 +199,28 @@ service cloud.firestore {
         && request.resource.data.ownerEmail == resource.data.ownerEmail
         && request.resource.data.active == resource.data.active);
     }
-
-    // הצעות של משתלות: כולם רואים. רק בעל/ת המשתלה מפרסם/ת. כל משתמש יכול רק להוסיף צפייה או לחיצה.
     match /promos/{id} {
       allow read: if signed();
-      allow create: if signed() && request.resource.data.ownerEmail == email() && ownsNursery(request.resource.data.nurseryId);
-      allow update: if isAdmin()
-        || (signed() && resource.data.ownerEmail == email() && request.resource.data.ownerEmail == email())
-        || (signed() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views', 'clicks']));
+      allow create: if signed() && notBanned() && request.resource.data.ownerEmail == email() && ownsNursery(request.resource.data.nurseryId);
+      // בעל המשתלה לא יכול להעביר הצעה למשתלה אחרת
+      allow update: if isAdmin() || (signed() && resource.data.ownerEmail == email()
+        && request.resource.data.ownerEmail == email()
+        && request.resource.data.nurseryId == resource.data.nurseryId);
       allow delete: if isAdmin() || (signed() && resource.data.ownerEmail == email());
-    }
-
-    // בקשות הצטרפות של משתלות
-    match /nurseryApplications/{id} {
-      allow create: if signed() && request.resource.data.uid == me() && request.resource.data.email == email();
-      allow read: if isAdmin() || (signed() && resource.data.uid == me());
-      allow update, delete: if isAdmin();
-    }
-
-    // שיחות קוליות: רק שני המשתתפים. אפשר להתקשר רק למי שיש איתו התאמה.
-    match /calls/{id} {
-      allow read: if isAdmin() || (signed() && (resource.data.from == me() || resource.data.to == me()));
-      allow create: if signed() && request.resource.data.from == me()
-        && me() in matchUsers(request.resource.data.matchId)
-        && request.resource.data.to in matchUsers(request.resource.data.matchId);
-      allow update: if signed() && (resource.data.from == me() || resource.data.to == me())
-        && request.resource.data.from == resource.data.from && request.resource.data.to == resource.data.to;
-      match /cands/{cid} {
-        allow read, create: if signed() && (get(/databases/$(database)/documents/calls/$(id)).data.from == me()
-          || get(/databases/$(database)/documents/calls/$(id)).data.to == me());
+      // צפיות ולחיצות: כל משתמש נרשם פעם אחת בלבד, במסמך על שמו
+      match /seen/{u} {
+        allow create, update: if signed() && u == me();
+        allow read: if isAdmin() || (signed() && get(/databases/$(database)/documents/promos/$(id)).data.ownerEmail == email());
+      }
+      match /clicks/{u} {
+        allow create, update: if signed() && u == me();
+        allow read: if isAdmin() || (signed() && get(/databases/$(database)/documents/promos/$(id)).data.ownerEmail == email());
       }
     }
-
-    // דיווחים: אפשר רק לשלוח
-    match /reports/{id} {
-      allow create: if signed() && request.resource.data.from == me();
-      allow read, update: if isAdmin();
+    match /nurseryApplications/{id} {
+      allow create: if signed() && notBanned() && request.resource.data.uid == me() && request.resource.data.email == email();
+      allow read: if isAdmin() || (signed() && resource.data.uid == me());
+      allow update, delete: if isAdmin();
     }
   }
 }

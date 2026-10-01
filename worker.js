@@ -2,6 +2,29 @@
 // 1. מעביר את דפי ההתחברות של Google/Firebase דרך הכתובת של האתר (בשביל אייפון).
 // 2. נותן לאפליקציה פרטי "ממסר" (TURN) לשיחות קוליות, כדי שיתחברו גם בסלולר.
 const FIREBASE_HOST = 'leafloop-f882c.firebaseapp.com';
+const PROJECT_ID = 'leafloop-f882c';
+
+// בדיקה שהבקשה מגיעה ממשתמש מחובר של LeafLoop (אימות ה-ID Token של Firebase)
+let JWKS = null, JWKS_AT = 0;
+function b64u(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+async function verifyIdToken(token) {
+  try {
+    const [h, p, sig] = token.split('.');
+    if (!h || !p || !sig) return null;
+    const dec = x => JSON.parse(new TextDecoder().decode(b64u(x)));
+    const header = dec(h), payload = dec(p), now = Math.floor(Date.now() / 1000);
+    if (header.alg !== 'RS256' || payload.aud !== PROJECT_ID || payload.iss !== `https://securetoken.google.com/${PROJECT_ID}`) return null;
+    if (!payload.sub || payload.exp < now || payload.iat > now + 300) return null;
+    if (!JWKS || Date.now() - JWKS_AT > 3600e3) {
+      const r = await fetch('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com');
+      JWKS = (await r.json()).keys || []; JWKS_AT = Date.now();
+    }
+    const jwk = JWKS.find(k => k.kid === header.kid); if (!jwk) return null;
+    const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64u(sig), new TextEncoder().encode(h + '.' + p));
+    return ok ? payload.sub : null;
+  } catch (e) { return null; }
+}
 
 async function turnServers(env) {
   if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return [];
@@ -25,6 +48,9 @@ export default {
     if (url.pathname === '/api/turn') {
       const origin = request.headers.get('Origin');
       if (origin && new URL(origin).host !== url.host) return new Response('forbidden', { status: 403 });
+      const auth = request.headers.get('Authorization') || '';
+      const uid = auth.startsWith('Bearer ') ? await verifyIdToken(auth.slice(7)) : null;
+      if (!uid) return new Response(JSON.stringify({ iceServers: [] }), { status: 401, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
       const iceServers = await turnServers(env);
       return new Response(JSON.stringify({ iceServers }), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     }

@@ -12,6 +12,12 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const errLog = e => console.error('[LeafLoop]', e);
+// ---------- בדיקת נתונים שמגיעים ממסד הנתונים (הגנה מהזרקת קוד) ----------
+const okId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,700}$/.test(id);
+const safeImg = src => (typeof src === 'string' && /^data:image\/(jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(src) ? src : null);
+const safeAudio = src => (typeof src === 'string' && /^data:audio\/[a-z0-9.+-]+(;codecs=[a-z0-9.,-]+)?;base64,[A-Za-z0-9+/=]+$/i.test(src) ? src : null);
+const safeColor = c => (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#19A55B');
+const safeUrl = u => (typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/.test(u) ? u : null);
 
 // ---------- אייקונים ----------
 const ICONS = {
@@ -101,11 +107,19 @@ const S = {
   priv: { swipes: {}, saved: [], blocked: [], alertsSeenAt: 0 },
   myPlants: [], pool: [], poolAt: 0, users: {}, photos: {},
   matches: [], incoming: [], outgoing: [], msgs: [], reviews: [],
-  here: null, nurseries: [], promos: [], myNursery: null
+  here: null, nurseries: [], promos: [], myNursery: null, rep: {}
 };
 let filters = (() => { const d = { cat: 'all', offer: 'all', delivery: 'all', mode: 'all' }; try { return { ...d, ...JSON.parse(localStorage.getItem('ll_filters') || '{}') }; } catch (e) { return d; } })();
 const saveFilters = () => { try { localStorage.setItem('ll_filters', JSON.stringify(filters)); } catch (e) { } };
 const uid = () => S.me && S.me.uid;
+function pruneSwipes() {
+  const now = Date.now(), e = Object.entries(S.priv.swipes || {});
+  const t = v => +String(v).split(':')[1] || 0;
+  let keep = e.filter(([, v]) => !(String(v).startsWith('pass') && t(v) && now - t(v) > 45 * 864e5));
+  if (keep.length > 2500) keep = keep.sort((a, b) => t(b[1]) - t(a[1])).slice(0, 2500);
+  if (keep.length !== e.length) { S.priv.swipes = Object.fromEntries(keep); savePriv(); }
+  if ((S.priv.saved || []).length > 300) S.priv.saved = S.priv.saved.slice(-300);
+}
 let privT;
 function savePriv() {
   clearTimeout(privT);
@@ -151,7 +165,9 @@ function greeting() {
 const pubInfo = u => ({ name: u.name || 'משתמש/ת', color: u.color || '#19A55B', photo: u.photo || null, city: u.city || '' });
 const owner = p => S.users[p.ownerId] || { id: p.ownerId, name: p.ownerName, color: p.ownerColor, photo: p.ownerPhoto, city: p.city, wishlist: [] };
 const isBlocked = id => (S.priv.blocked || []).includes(id);
-const rating = u => (u && u.ratingCount ? `★${Number(u.ratingAvg).toFixed(1)}` : 'חדש/ה');
+// הדירוג מחושב תמיד מתוך הדירוגים עצמם, ולא משדה שהמשתמש יכול לשנות
+const repOf = u => (u && S.rep[u.id]) || { avg: 0, count: 0 };
+const rating = u => { const r = repOf(u); return r.count ? `★${r.avg.toFixed(1)}` : 'חדש/ה'; };
 const otherId = m => m.users.find(x => x !== uid());
 const otherInfo = m => (m.info && m.info[otherId(m)]) || { name: 'משתמש/ת', color: '#19A55B' };
 
@@ -159,13 +175,14 @@ const askArt = `<div class="art gift-art ask-art" aria-label="שיחה">💬</di
 function visual(p, kind) {
   if (!p || (!p.catId && !p.thumb && !p.img)) return kind === 'ask' ? askArt : `<div class="art gift-art" aria-label="מתנה">🎁</div>`;
   const key = p.id || p.catId;
-  const src = S.photos[key] || p.thumb;
+  const src = safeImg(S.photos[key]) || safeImg(p.thumb);
   if (src) return `<div class="photo"><img data-pid="${esc(key)}" src="${src}" alt="${esc(pName(p))}"></div>`;
   return `<div class="art" style="background:${colorFor(key)}">${plantArt(catById(p.catId).art, key)}</div>`;
 }
 function avatar(u, cls = 'av') {
-  if (u && u.photo) return `<div class="${cls} has-img" style="background:${u.color || '#19A55B'}"><img src="${esc(u.photo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()"></div>`;
-  return `<div class="${cls}" style="background:${(u && u.color) || '#19A55B'}">${esc(initials(u && u.name))}</div>`;
+  const ph = u && safeUrl(u.photo);
+  if (ph) return `<div class="${esc(cls)} has-img" style="background:${safeColor(u.color)}"><img class="av-img" src="${esc(ph)}" alt="" referrerpolicy="no-referrer"></div>`;
+  return `<div class="${esc(cls)}" style="background:${safeColor(u && u.color)}">${esc(initials(u && u.name))}</div>`;
 }
 async function hydrate(plants) {
   for (const p of plants) {
@@ -214,7 +231,10 @@ function shrinkDataUrl(src, max, q) {
 }
 
 // ---------- לוגיקת התאמה ----------
-const myAvail = () => S.myPlants.filter(p => p.available);
+// צמח שאחרים יכולים לראות ולפנות עליו
+const isDiscoverable = p => !!p && p.available !== false && !p.frozen && !p.dealIn && !isBlocked(p.ownerId) && !(S.users[p.ownerId] && S.users[p.ownerId].banned);
+// צמחים שלי שאפשר להציע עכשיו
+const myAvail = () => S.myPlants.filter(p => p.available && !p.frozen && !p.dealIn);
 const theyWantMine = u => myAvail().filter(p => (u.wishlist || []).includes(p.catId));
 const iWant = p => (S.profile.wishlist || []).includes(p.catId);
 function matchType(p) {
@@ -227,7 +247,8 @@ function matchType(p) {
 function score(p) {
   const u = owner(p);
   let s = { perfect: 100, wishlist: 60, good: 35, nearby: 0 }[matchType(p)];
-  s += (u.ratingCount ? (u.ratingAvg - 4) * 10 : 0) + Math.min(u.swaps || 0, 30) / 3;
+  const r = repOf(u);
+  s += (r.count ? (r.avg - 4) * 10 : 0) + Math.min(r.count, 30) / 3;
   s -= dist(p) * 1.2;
   s += Math.max(0, 10 - (Date.now() - (p.t || 0)) / 864e5); // צמחים חדשים קצת למעלה
   return s;
@@ -236,7 +257,7 @@ const inActiveMatch = pid => S.matches.some(m => m.status !== 'cancelled' && m.p
 function feed() {
   const f = filters;
   return S.pool.filter(p =>
-    !p.frozen && !S.priv.swipes[p.id] && !inActiveMatch(p.id) && !isBlocked(p.ownerId) &&
+    isDiscoverable(p) && !S.priv.swipes[p.id] && !inActiveMatch(p.id) &&
     dist(p) <= S.profile.radius &&
     (f.cat === 'all' || catById(p.catId).cat === f.cat) &&
     (f.offer === 'all' || p.offer === f.offer) &&
@@ -278,7 +299,7 @@ function notifList() {
     const n = (m.unread || {})[uid()] || 0;
     if (n && !isBlocked(otherId(m))) out.push({ t: m.lastAt, text: `💬 ${n === 1 ? 'הודעה חדשה' : n + ' הודעות חדשות'} מ${otherInfo(m).name}`, link: 'chat/' + m.id, unread: true });
   });
-  S.pool.filter(p => iWant(p) && dist(p) <= S.profile.radius && !isBlocked(p.ownerId)).forEach(p => {
+  S.pool.filter(p => isDiscoverable(p) && iWant(p) && dist(p) <= S.profile.radius).forEach(p => {
     out.push({ t: p.t, text: `🌿 הצמח שלך כאן! ${p.ownerName} מציע/ה ${pName(p)}, ${fmtKm(dist(p))} ממך.`, link: 'plant/' + p.id, unread: (p.t || 0) > (S.priv.alertsSeenAt || 0) });
   });
   return out.sort((a, b) => (b.t || 0) - (a.t || 0)).slice(0, 40);
@@ -328,10 +349,18 @@ function activePromos() {
   const now = Date.now(), act = new Set(S.nurseries.filter(n => n.active).map(n => n.id));
   return S.promos.filter(p => p.active && act.has(p.nurseryId) && (!p.until || p.until >= now) && dist(p) <= (p.radius || 25));
 }
-const promoVisual = pr => pr.img ? `<div class="photo"><img src="${pr.img}" alt="${esc(pr.title)}"></div>` : visual({ id: pr.id, catId: pr.catId || 'monstera' });
+const promoVisual = pr => safeImg(pr.img) ? `<div class="photo"><img src="${safeImg(pr.img)}" alt="${esc(pr.title)}"></div>` : visual({ id: pr.id, catId: pr.catId || 'monstera' });
+const nurseryImg = (n, cls) => safeImg(n.img) ? `<div class="photo"><img src="${safeImg(n.img)}" alt=""></div>` : `<div class="art nursery-art ${cls || ''}">🌿</div>`;
 const viewed = new Set();
-function countView(pr) { if (viewed.has(pr.id)) return; viewed.add(pr.id); updateDoc(doc(db, 'promos', pr.id), { views: increment(1) }).catch(errLog); }
-function countClick(pr) { updateDoc(doc(db, 'promos', pr.id), { clicks: increment(1) }).catch(errLog); }
+// כל משתמש נספר פעם אחת בלבד לכל הצעה, כך שאי אפשר לנפח את המספרים
+function countView(pr) { if (viewed.has(pr.id) || !uid()) return; viewed.add(pr.id); setDoc(doc(db, 'promos', pr.id, 'seen', uid()), { t: Date.now() }).catch(errLog); }
+function countClick(pr) { if (!uid()) return; setDoc(doc(db, 'promos', pr.id, 'clicks', uid()), { t: Date.now() }).catch(errLog); }
+async function promoStats(list) {
+  await Promise.all(list.map(async pr => {
+    const [v, c] = await Promise.all([cnt(collection(db, 'promos', pr.id, 'seen')), cnt(collection(db, 'promos', pr.id, 'clicks'))]);
+    pr.views = v || 0; pr.clicks = c || 0;
+  }));
+}
 const waNum = ph => { let d = String(ph || '').replace(/\D/g, ''); if (d.startsWith('0')) d = '972' + d.slice(1); return d; };
 function contactBtns(n) {
   if (!n) return '';
@@ -354,7 +383,7 @@ function openPromo(pr) {
 }
 function nurseryCard(n) {
   const cnt = activePromos().filter(p => p.nurseryId === n.id).length;
-  return `<button class="mini nursery-mini" data-a="open" data-to="nursery/${n.id}"><div class="mv">${n.img ? `<div class="photo"><img src="${n.img}" alt=""></div>` : `<div class="art nursery-art">🌿</div>`}</div><div class="mt">${esc(n.name)}<div class="ms">${fmtKm(dist(n))}${cnt ? `, ${cnt} הצעות` : ''}</div></div></button>`;
+  return `<button class="mini nursery-mini" data-a="open" data-to="nursery/${n.id}"><div class="mv">${nurseryImg(n)}</div><div class="mt">${esc(n.name)}<div class="ms">${fmtKm(dist(n))}${cnt ? `, ${cnt} הצעות` : ''}</div></div></button>`;
 }
 
 // =====================================================
@@ -470,7 +499,7 @@ async function finishOnboarding(el) {
   busy(el, true, 'יוצרים פרופיל…');
   const data = {
     name: ob.name, color: ob.color, photo: S.me.photoURL || null, city: ob.city, lat: ob.lat, lng: ob.lng,
-    radius: ob.radius, wishlist: ob.wish, swaps: 0, rehomed: 0, ratingAvg: 0, ratingCount: 0,
+    radius: ob.radius, wishlist: ob.wish,
     createdAt: Date.now(), lastSeen: Date.now()
   };
   try {
@@ -520,6 +549,7 @@ async function startSession() {
   try {
     const ps = await getDoc(doc(db, 'users', uid(), 'private', 'state'));
     if (ps.exists()) S.priv = { swipes: {}, saved: [], blocked: [], alertsSeenAt: 0, ...ps.data() };
+    pruneSwipes();
   } catch (e) { errLog(e); }
   listen();
   autoLocate();
@@ -532,20 +562,31 @@ async function startSession() {
 async function loadPool(force) {
   if (!force && Date.now() - S.poolAt < 90000) return;
   const s = await getDocs(query(collection(db, 'plants'), where('available', '==', true), limit(400)));
-  S.pool = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.ownerId !== uid());
+  S.pool = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => okId(p.id) && okId(p.ownerId) && p.ownerId !== uid());
   const ids = [...new Set(S.pool.map(p => p.ownerId))];
   ids.forEach(id => { delete S.users[id]; });
   await Promise.all(ids.map(getUser));
   S.pool = S.pool.filter(p => !(S.users[p.ownerId] && S.users[p.ownerId].banned));
+  loadReps(ids).catch(errLog);
   try {
     const [ns, ps] = await Promise.all([
       getDocs(query(collection(db, 'nurseries'), where('active', '==', true), limit(100))),
       getDocs(query(collection(db, 'promos'), where('active', '==', true), limit(150)))
     ]);
-    S.nurseries = ns.docs.map(d => ({ id: d.id, ...d.data() }));
-    S.promos = ps.docs.map(d => ({ id: d.id, ...d.data() }));
+    S.nurseries = ns.docs.map(d => ({ id: d.id, ...d.data() })).filter(n => okId(n.id));
+    S.promos = ps.docs.map(d => ({ id: d.id, ...d.data() })).filter(pr => okId(pr.id) && okId(pr.nurseryId));
   } catch (e) { errLog(e); }
   S.poolAt = Date.now();
+}
+async function loadReps(ids) {
+  const todo = ids.filter(id => !S.rep[id]);
+  for (let i = 0; i < todo.length; i += 30) {
+    const chunk = todo.slice(i, i + 30);
+    const s2 = await getDocs(query(collection(db, 'reviews'), where('to', 'in', chunk)));
+    const agg = {}; chunk.forEach(id => { agg[id] = { sum: 0, count: 0 }; });
+    s2.docs.forEach(d => { const r = d.data(); if (agg[r.to] && r.all >= 1 && r.all <= 5) { agg[r.to].sum += r.all; agg[r.to].count++; } });
+    chunk.forEach(id => { const a = agg[id]; S.rep[id] = { avg: a.count ? a.sum / a.count : 0, count: a.count }; });
+  }
 }
 async function loadMyNursery() {
   if (!S.me || !S.me.email) return;
@@ -566,7 +607,7 @@ function listen() {
   let gotMatches; S.matchesReady = new Promise(r => { gotMatches = r; });
   subs.push(onSnapshot(query(collection(db, 'matches'), where('users', 'array-contains', me)), s => {
     gotMatches();
-    const list = s.docs.map(d => ({ id: d.id, ...d.data() }));
+    const list = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(m => okId(m.id) && Array.isArray(m.users) && m.users.every(okId) && m.give && m.info);
     list.forEach(m => {
       const prev = seen[m.id];
       const viewing = location.hash === '#chat/' + m.id;
@@ -577,7 +618,9 @@ function listen() {
       seen[m.id] = m.lastAt || 0;
       ((m.give || {})[me] || []).forEach(pid => {
         const x = S.myPlants.find(p => p.id === pid); if (!x) return;
-        if (m.status === 'swapped' && x.available) updateDoc(doc(db, 'plants', pid), { available: false, swappedIn: m.id }).catch(errLog);
+        if (m.status === 'swapped' && x.available) updateDoc(doc(db, 'plants', pid), { available: false, swappedIn: m.id, dealIn: null }).catch(errLog);
+        else if (['agreed', 'meeting'].includes(m.status) && !x.dealIn && x.available) updateDoc(doc(db, 'plants', pid), { dealIn: m.id }).catch(errLog);
+        else if (['discussing', 'cancelled'].includes(m.status) && x.dealIn === m.id) updateDoc(doc(db, 'plants', pid), { dealIn: null }).catch(errLog);
         else if (m.status !== 'swapped' && !x.available && x.swappedIn === m.id) updateDoc(doc(db, 'plants', pid), { available: true, swappedIn: null }).then(() => toast(`ה${pName(x)} חזר/ה להיות זמין/ה לאחרים`)).catch(errLog);
       });
     });
@@ -593,7 +636,7 @@ function listen() {
   let firstIn = true;
   subs.push(onSnapshot(query(collection(db, 'requests'), where('to', '==', me)), s => {
     const prevIds = S.incoming.map(r => r.id);
-    S.incoming = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.status === 'pending' && !isBlocked(r.from)).sort((a, b) => b.t - a.t);
+    S.incoming = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => okId(r.id) && okId(r.from) && okId(r.target) && Array.isArray(r.offer) && r.offer.every(okId) && r.status === 'pending' && !isBlocked(r.from)).sort((a, b) => b.t - a.t);
     const fresh = S.incoming.find(r => !prevIds.includes(r.id));
     if (!firstIn && fresh) toast(`🌿 ${fresh.fromInfo.name} שלח/ה לך הצעת החלפה`);
     firstIn = false;
@@ -626,10 +669,7 @@ function syncStats() {
   const done = S.matches.filter(m => m.status === 'swapped');
   const swaps = done.length;
   const rehomed = done.reduce((s, m) => s + (((m.give || {})[me] || []).length), 0);
-  if (S.profile && (S.profile.swaps !== swaps || S.profile.rehomed !== rehomed)) {
-    S.profile.swaps = swaps; S.profile.rehomed = rehomed;
-    updateDoc(doc(db, 'users', me), { swaps, rehomed }).catch(errLog);
-  }
+  if (S.profile) { S.profile.swaps = swaps; S.profile.rehomed = rehomed; } // מחושב מקומית בלבד
 }
 
 // =====================================================
@@ -638,8 +678,8 @@ function syncStats() {
 let lastSwipe = null;
 VIEWS.swipe = function () {
   const R = S.profile.radius;
-  const nearWish = S.pool.filter(p => iWant(p) && dist(p) <= R && !isBlocked(p.ownerId)).sort((a, b) => dist(a) - dist(b));
-  const people = [...new Set(S.pool.filter(p => dist(p) <= R && !isBlocked(p.ownerId)).map(p => p.ownerId))].map(id => S.users[id]).filter(Boolean).sort((a, b) => dist(a) - dist(b)).slice(0, 20);
+  const nearWish = S.pool.filter(p => isDiscoverable(p) && iWant(p) && dist(p) <= R).sort((a, b) => dist(a) - dist(b));
+  const people = [...new Set(S.pool.filter(p => isDiscoverable(p) && dist(p) <= R).map(p => p.ownerId))].map(id => S.users[id]).filter(Boolean).sort((a, b) => dist(a) - dist(b)).slice(0, 20);
   const nurs = S.nurseries.filter(n => n.active && dist(n) <= Math.max(R, 30)).sort((a, b) => dist(a) - dist(b)).slice(0, 12);
   const n = notifList().filter(x => x.unread).length;
   const canLive = !S.here && liveOn() && !!navigator.geolocation;
@@ -671,11 +711,11 @@ VIEWS.swipe = function () {
 // =====================================================
 // חיפוש (המסך הראשי)
 // =====================================================
-const SQ = { q: '', mode: 'all' };
+const SQ = { q: '', mode: 'all', far: false };
 const plantMatchesQ = (p, q) => { const c = catById(p.catId); return c.he.toLowerCase().includes(q) || (c.sci || '').toLowerCase().includes(q) || (CATS[c.cat] || '').includes(q); };
 function searchList(radius) {
   const q = cleanName(SQ.q).toLowerCase();
-  let list = S.pool.filter(p => !p.frozen && !isBlocked(p.ownerId) && dist(p) <= radius && modeMatch(p, SQ.mode));
+  let list = S.pool.filter(p => isDiscoverable(p) && dist(p) <= radius && modeMatch(p, SQ.mode));
   if (q) list = list.filter(p => plantMatchesQ(p, q));
   return list.sort((a, b) => {
     if (q) { const sa = pName(a).toLowerCase().startsWith(q) ? 0 : 1, sb = pName(b).toLowerCase().startsWith(q) ? 0 : 1; if (sa !== sb) return sa - sb; }
@@ -694,12 +734,13 @@ function promoResult(pr) {
 function renderResults() {
   const box = $('#results'); if (!box) return;
   const R = S.profile.radius, q = cleanName(SQ.q).toLowerCase();
-  const list = searchList(R);
+  const list = searchList(SQ.far ? 9999 : R);
   const promos = activePromos().filter(pr => !q || pr.title.toLowerCase().includes(q) || (pr.catId && catById(pr.catId).he.toLowerCase().includes(q))).slice(0, 3);
   const items = list.map(resultCard);
   promos.forEach((pr, i) => items.splice(Math.min(items.length, 2 + i * 6), 0, promoResult(pr)));
+  const farChip = SQ.far ? `<div class="pad" style="padding-bottom:0"><button class="sel on" data-a="nearOnly">🌍 בכל הארץ ✕</button></div>` : '';
   const title = q ? (list.length ? `${list.length === 1 ? 'נמצא צמח אחד' : `נמצאו ${list.length} צמחים`}` : '') : 'צמחים לידך';
-  if (items.length) { box.innerHTML = `<h2 class="section-t" style="margin-top:14px">${title}</h2><div class="rgrid">${items.join('')}</div>`; return; }
+  if (items.length) { box.innerHTML = `${farChip}<h2 class="section-t" style="margin-top:14px">${title}</h2><div class="rgrid">${items.join('')}</div>`; return; }
   const far = searchList(9999).length;
   box.innerHTML = `<div class="empty"><h3>${q ? `לא מצאנו "${esc(SQ.q.trim())}" לידך` : 'עוד אין כאן צמחים'}</h3>
     ${far ? `<p>יש ${far === 1 ? 'אחד' : far} כאלה רחוק יותר.</p><button class="btn sun sm" data-a="searchFar" style="margin:0 auto 10px">חיפוש בכל הארץ</button>` : ''}
@@ -711,7 +752,7 @@ VIEWS.discover = function () {
   const R = S.profile.radius;
   const n = notifList().filter(x => x.unread).length;
   const canLive = !S.here && liveOn() && !!navigator.geolocation;
-  const nearWish = S.pool.filter(p => !p.frozen && iWant(p) && dist(p) <= R && !isBlocked(p.ownerId)).sort((a, b) => dist(a) - dist(b));
+  const nearWish = S.pool.filter(p => isDiscoverable(p) && iWant(p) && dist(p) <= R).sort((a, b) => dist(a) - dist(b));
   const nurs = S.nurseries.filter(x => x.active && dist(x) <= Math.max(R, 30)).sort((a, b) => dist(a) - dist(b)).slice(0, 12);
   const swipeN = feed().length;
   $('#view').innerHTML = `
@@ -735,6 +776,7 @@ VIEWS.discover = function () {
 };
 const modeTag = p => {
   if (p && p.frozen) return `<span class="mode m-frozen">🔒 מוקפא</span>`;
+  if (p && p.dealIn) return `<span class="mode m-frozen">🤝 בתהליך החלפה</span>`;
   const k = modeOf(p), m = MODE[k];
   return `<span class="mode ${m.c}">${m.i} ${k === 'sale' && p.price ? priceTxt(p) : m.t}</span>`;
 };
@@ -851,16 +893,16 @@ function decide(a) {
   const p = S.pool.find(x => x.id === card.dataset.id); if (!p) return;
   card.classList.add('leaving'); card.style.transform = out;
   if (navigator.vibrate) navigator.vibrate(12);
-  S.priv.swipes[p.id] = a;
+  S.priv.swipes[p.id] = a + ':' + Date.now();
   if (a === 'save' && !S.priv.saved.includes(p.id)) { S.priv.saved.push(p.id); toast('נשמר. תמצאו אותו בפרופיל, תחת "שמורים".'); }
-  lastSwipe = (a === 'pass' || a === 'save') ? { id: p.id, a } : null;
+  lastSwipe = { id: p.id, a };
   savePriv();
   setTimeout(() => { renderDeck(); if (a === 'like' || a === 'super') afterLike(p, a === 'super'); }, 260);
 }
 async function afterLike(p, sup) {
   const me = uid();
   const u = await getUser(p.ownerId);
-  setDoc(doc(db, 'likes', me + '_' + p.id), { from: me, to: p.ownerId, plantId: p.id, super: !!sup, t: Date.now() }).catch(errLog);
+  try { await setDoc(doc(db, 'likes', me + '_' + p.id), { from: me, to: p.ownerId, plantId: p.id, super: !!sup, t: Date.now() }); } catch (e) { errLog(e); }
   if (modeOf(p) === 'gift' || modeOf(p) === 'sale') return openRequestSheet(p, u, sup);
   let mine = theyWantMine(u).map(x => x.id);
   let mutual = false;
@@ -871,7 +913,7 @@ async function afterLike(p, sup) {
   } catch (e) { errLog(e); }
   if ((mine.length && iWant(p)) || mutual) {
     try {
-      const m = await createMatch({ other: u, mineIds: [mine[0]], theirIds: [p.id], theirPlants: [p], type: 'perfect' });
+      const m = await createMatch({ other: u, mineIds: [mine[0]], theirIds: [p.id], theirPlants: [p], type: 'perfect', basis: 'like' });
       showMatch(m);
     } catch (e) { errLog(e); toast('לא הצלחנו ליצור את ההתאמה. נסו שוב.'); }
   } else openRequestSheet(p, u, sup);
@@ -940,17 +982,19 @@ async function sendRequest(el) {
 async function acceptReq(rid, toChat, el) {
   const r = S.incoming.find(x => x.id === rid); if (!r) return;
   const target = S.myPlants.find(p => p.id === r.target);
-  if (!target || !target.available) {
+  if (!target || !target.available || target.frozen) {
     toast('הצמח הזה כבר לא זמין אצלך, אז ההצעה נדחתה.');
     return updateDoc(doc(db, 'requests', rid), { status: 'declined' }).catch(errLog);
   }
   busy(el, true);
   try {
     const u = await getUser(r.from);
+    // קודם מאשרים את הפנייה, ורק אז נוצרת ההתאמה (כללי האבטחה בודקים את הסדר הזה)
+    await updateDoc(doc(db, 'requests', rid), { status: 'accepted' });
     const theirPlants = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
-    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', kind: r.kind || (r.offer.length ? 'swap' : 'gift'), status: toChat || r.kind === 'ask' || r.kind === 'buy' ? 'discussing' : 'agreed' });
-    await updateDoc(doc(db, 'requests', rid), { status: 'accepted', matchId: m.id });
-    if (r.msg) addDoc(collection(db, 'matches', m.id, 'messages'), { from: uid(), sys: true, text: `💬 ${r.fromInfo.name} כתב/ה: ${r.msg}`, t: Date.now() + 1 }).catch(errLog);
+    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', reqId: rid, kind: r.kind || (r.offer.length ? 'swap' : 'gift'), status: toChat || r.kind === 'ask' || r.kind === 'buy' ? 'discussing' : 'agreed' });
+    updateDoc(doc(db, 'requests', rid), { matchId: m.id }).catch(errLog);
+    if (r.msg) addDoc(collection(db, 'matches', m.id, 'messages'), { from: uid(), sys: true, text: `💬 ${r.fromInfo.name} כתב/ה: ${String(r.msg).slice(0, 300)}`, t: Date.now() + 1 }).catch(errLog);
     if (toChat) go('chat/' + m.id); else showMatch(m);
   } catch (e) { errLog(e); busy(el, false); toast('לא הצלחנו לאשר. נסו שוב.'); }
 }
@@ -958,10 +1002,11 @@ async function acceptReq(rid, toChat, el) {
 // ---------- יצירת התאמה ----------
 async function createMatch(o) {
   const me = uid(), u = o.other;
-  const id = [me, u.id].sort().join('_') + '_' + [...o.mineIds, ...o.theirIds].sort().join('_');
-  const ref = doc(db, 'matches', id);
+  let id = [me, u.id].sort().join('_') + '_' + [...o.mineIds, ...o.theirIds].sort().join('_');
+  let ref = doc(db, 'matches', id);
   const ex = await getDoc(ref);
   if (ex.exists() && ex.data().status !== 'cancelled') return { id, ...ex.data() };
+  if (ex.exists()) { id = id + '_' + Date.now().toString(36); ref = doc(db, 'matches', id); } // התאמה ישנה שבוטלה: מתחילים חדשה
   const snap = {};
   o.mineIds.forEach(pid => { const x = S.myPlants.find(p => p.id === pid); if (x) snap[pid] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer, qty: x.qty || 1, price: x.price || null, owner: me }; });
   o.theirIds.forEach(pid => { const x = o.theirPlants.find(p => p.id === pid); if (x) snap[pid] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer || 'full', qty: x.qty || 1, owner: u.id }; });
@@ -970,7 +1015,7 @@ async function createMatch(o) {
     users: [me, u.id], info: { [me]: pubInfo(S.profile), [u.id]: pubInfo(u) },
     give: { [me]: o.mineIds, [u.id]: o.theirIds }, plants: snap, type: o.type, kind: o.kind || 'swap', status: o.status || 'discussing',
     createdBy: me, createdAt: now, lastAt: now, lastMsg: 'התאמה חדשה!', lastFrom: me,
-    unread: { [me]: 0, [u.id]: 1 }, meeting: null, rated: []
+    unread: { [me]: 0, [u.id]: 1 }, meeting: null, rated: [], reqId: o.reqId || null
   };
   await setDoc(ref, data);
   await addDoc(collection(db, 'matches', id, 'messages'), { from: me, sys: true, text: '🌿 יש התאמה! מומלץ לתאם מפגש במקום ציבורי.', t: now });
@@ -1028,7 +1073,7 @@ VIEWS.plant = async function (id) {
     ${p.frozen ? `<div class="mode-big m-frozen">🔒 המודעה מוקפאת<span>${mine ? 'אחרים לא רואים אותה ולא יכולים לפנות עליה' : 'הצמח שמור כרגע למישהו'}</span></div>`
       : `<div class="mode-big ${MODE[modeOf(p)].c}">${MODE[modeOf(p)].i} ${modeOf(p) === 'sale' && p.price ? `למכירה, ${priceTxt(p)}` : MODE[modeOf(p)].t}<span>${MODE_HINT[modeOf(p)]}</span></div>`}
     <div class="facts"><div class="fact"><b>${OFFER[p.offer]}</b><span>מה מוצע</span></div><div class="fact"><b>${COND[p.condition] || ''}</b><span>מצב</span></div><div class="fact"><b>${p.qty || 1}</b><span>כמות</span></div></div>
-    <div class="owner">${avatar(u)}<div style="flex:1"><b>${esc(u.name)}</b><div class="small muted">${esc(u.city || p.city || '')}${mine ? '' : ', ' + fmtKm(dist(p)) + ' ממך'}</div></div><div style="text-align:center"><b style="font-family:var(--font-d)">${rating(u)}</b><div class="small muted">${u.swaps || 0} החלפות</div></div></div>
+    <div class="owner">${avatar(u)}<div style="flex:1"><b>${esc(u.name)}</b><div class="small muted">${esc(u.city || p.city || '')}${mine ? '' : ', ' + fmtKm(dist(p)) + ' ממך'}</div></div><div style="text-align:center"><b style="font-family:var(--font-d)">${rating(u)}</b><div class="small muted">${repOf(u).count ? `${repOf(u).count} דירוגים` : 'עוד אין דירוגים'}</div></div></div>
     ${mine || p.frozen || ['gift', 'sale'].includes(modeOf(p)) ? '' : `<p class="label">${modeOf(p) === 'both' ? 'אם תרצו להציע משהו בתמורה' : `${esc(u.name)} רוצה בתמורה`}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
     <p class="label">מסירה</p><div class="chips"><span class="chip">${DELIV[p.delivery] || ''}</span><span class="chip">${ic('shield', 14)} מפגש במקום ציבורי</span></div>
     <div style="margin-top:22px">
@@ -1046,7 +1091,7 @@ VIEWS.plant = async function (id) {
 // מפה
 // =====================================================
 VIEWS.map = function () {
-  const near = S.pool.filter(p => dist(p) <= S.profile.radius && !isBlocked(p.ownerId)).sort((a, b) => dist(a) - dist(b));
+  const near = S.pool.filter(p => isDiscoverable(p) && dist(p) <= S.profile.radius).sort((a, b) => dist(a) - dist(b));
   $('#view').innerHTML = `<div class="ph"><h1>צמחים באזור</h1></div>
   <p class="muted small" style="margin:-4px 18px 12px">${icInline('shield', 14)} המיקומים משוערים בכוונה, כדי לשמור על הפרטיות של כולם.</p>
   <div id="map"></div>
@@ -1075,7 +1120,7 @@ function initMap(near, tries = 0) {
   near.forEach(p => { (by[p.ownerId] = by[p.ownerId] || []).push(p); });
   Object.values(by).forEach(ps => {
     const u = owner(ps[0]);
-    L.circle([jitter(u.id, ps[0].lat, 'a'), jitter(u.id, ps[0].lng, 'b')], { radius: 450, color: u.color || '#19A55B', fillColor: u.color || '#19A55B', fillOpacity: .45, weight: 2 }).addTo(mapObj)
+    L.circle([jitter(u.id, ps[0].lat, 'a'), jitter(u.id, ps[0].lng, 'b')], { radius: 450, color: safeColor(u.color), fillColor: safeColor(u.color), fillOpacity: .45, weight: 2 }).addTo(mapObj)
       .bindPopup(`<b>${esc(u.name)}</b>, ${fmtKm(dist(ps[0]))}<br>${ps.map(p => `<a href="#plant/${p.id}">${MODE[modeOf(p)].i} ${esc(pName(p))}</a>`).join('<br>')}`);
   });
   S.nurseries.filter(n => n.active && n.lat).forEach(n => {
@@ -1101,7 +1146,7 @@ VIEWS.add = function () {
     <button class="btn ghost" data-a="skipPhoto">בלי תמונה, בחירה מהרשימה</button>`;
   } else {
     const c = d.catId ? catById(d.catId) : null;
-    html += d.img ? `<div class="scan" style="height:240px"><img src="${d.img}" alt="התמונה שלך"><label class="lbl" for="gal2" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div><input type="file" id="gal2" accept="image/*" class="sr" data-change="photo">` : '';
+    html += safeImg(d.img) ? `<div class="scan" style="height:240px"><img src="${safeImg(d.img)}" alt=""התמונה שלך"><label class="lbl" for="gal2" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div><input type="file" id="gal2" accept="image/*" class="sr" data-change="photo">` : '';
     html += `<p class="label">איזה צמח זה?</p>
     <input class="field" id="plant-name" data-suggest="name" placeholder="כתבו את השם, למשל: מונסטרה מונקי" value="${esc(c ? c.he : '')}" data-change="plantName" autocomplete="off" enterkeyhint="done">
     <div class="sugg" id="plant-name-sugg"></div>
@@ -1156,11 +1201,11 @@ async function savePlant(el) {
     await b.commit();
     if (draft.img) S.photos[ref.id] = draft.img;
     if (newWants.length) pr.wishlist = [...(pr.wishlist || []), ...newWants];
-    const seekers = Object.values(S.users).filter(u => (u.wishlist || []).includes(data.catId) && dist(u) <= pr.radius).length;
+    const seekers = Math.max(0, ((await cnt(query(collection(db, 'users'), where('wishlist', 'array-contains', data.catId)))) || 0));
     const name = pName(data);
     draft = null;
     go('discover');
-    setTimeout(() => toast(seekers ? `פורסם! ${seekers === 1 ? 'מישהו באזור מחפש' : seekers + ' אנשים באזור מחפשים'} ${name} 🔥` : `פורסם! ה${name} שלך מחכה להתאמה.`), 300);
+    setTimeout(() => toast(seekers ? `פורסם! ${seekers === 1 ? 'משתמש אחד מחפש' : seekers + ' משתמשים מחפשים'} ${name} 🔥` : `פורסם! ה${name} שלך מחכה להתאמה.`), 300);
   } catch (e) { errLog(e); busy(el, false); $('#add-err').textContent = 'הפרסום לא הצליח. בדקו את החיבור ונסו שוב.'; }
 }
 
@@ -1204,22 +1249,22 @@ function matchRow(m) {
 VIEWS.chat = function (id) {
   const m = S.matches.find(x => x.id === id);
   if (!m) { $('#view').innerHTML = `<div class="empty"><h3>השיחה לא נמצאה</h3><button class="btn hot sm" data-a="open" data-to="matches" style="margin:12px auto 0">להתאמות</button></div>`; return; }
-  const info = otherInfo(m), done = ['swapped', 'cancelled'].includes(m.status);
+  const info = otherInfo(m), done = ['swapped', 'cancelled'].includes(m.status) || !!m.blockedBy;
   $('#view').innerHTML = `<div class="chat">
     <header class="chat-h"><button class="icon-btn" data-a="open" data-to="matches" aria-label="חזרה">${ic('back')}</button>${avatar(info)}
       <div style="flex:1;min-width:0"><b>${esc(info.name)}</b><div class="small muted">${esc(info.city || '')}</div></div>
       <button class="pill st-${m.status}" id="chat-status" data-a="statusSheet" data-id="${m.id}">${STATUS[m.status]} ▾</button>
-      ${m.status !== 'cancelled' && !isBlocked(otherId(m)) ? `<button class="icon-btn call-btn" data-a="call" data-id="${m.id}" aria-label="שיחה קולית">${ic('phone', 20)}</button>` : ''}
+      ${m.status !== 'cancelled' && !m.blockedBy && !isBlocked(otherId(m)) ? `<button class="icon-btn call-btn" data-a="call" data-id="${m.id}" aria-label="שיחה קולית">${ic('phone', 20)}</button>` : ''}
       <button class="icon-btn" data-a="chatMenu" data-id="${m.id}" aria-label="עוד אפשרויות">${ic('dots')}</button></header>
     <div class="swapbar" id="swapbar"></div>
     <div class="msgs" id="msgs"><div class="loading" style="min-height:120px"><span class="spin"></span></div></div>
     ${done ? (m.status === 'swapped' && !(m.rated || []).includes(uid()) ? `<div class="quick"><button class="sel on" data-a="rate" data-id="${m.id}">⭐ דירוג ההחלפה</button></div>` : '') : `<div class="quick">${QUICK.map(q => `<button class="sel" data-a="quick" data-id="${m.id}" data-t="${esc(q)}">${esc(q)}</button>`).join('')}<button class="sel" data-a="meetSheet" data-id="${m.id}">${icInline('pin', 14)} קביעת מפגש</button></div>`}
-    <div class="composer" id="composer">${composerHTML(m.id)}</div>
+    ${m.blockedBy ? `<div class="composer blocked-note">🚫 אי אפשר לשלוח הודעות בשיחה הזו.</div>` : `<div class="composer" id="composer">${composerHTML(m.id)}</div>`}
   </div>`;
   renderSwapbar(m);
   S.msgs = [];
   chatUnsub = onSnapshot(query(collection(db, 'matches', id, 'messages'), orderBy('t')), s => {
-    S.msgs = s.docs.map(d => ({ id: d.id, ...d.data() }));
+    S.msgs = s.docs.map(d => ({ id: d.id, ...d.data() })).filter(x => okId(x.id));
     renderMsgs(m);
     const cur = S.matches.find(x => x.id === id);
     if (cur && (cur.unread || {})[uid()]) updateDoc(doc(db, 'matches', id), { [`unread.${uid()}`]: 0 }).catch(errLog);
@@ -1249,7 +1294,8 @@ function composerHTML(mid) {
 const fmtDur = sec => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 function msgBody(x) {
   if (x.audio) return `<div class="voice"><button class="vplay" data-a="vplay" data-id="${x.id}" aria-label="ניגון">${ic('play', 18)}</button><span class="vbar"><i id="vb-${x.id}"></i></span><span class="vdur">${fmtDur(x.dur || 0)}</span></div>`;
-  if (x.img) return `<img src="${x.img}" alt="תמונה">`;
+  if (safeImg(x.img)) return `<img src="${safeImg(x.img)}" alt="תמונה">`;
+  if (x.img) return '<span class="muted">📷 תמונה</span>';
   return esc(x.text);
 }
 function renderMsgs(m) {
@@ -1310,7 +1356,7 @@ VIEWS.profile = function () {
   $('#view').innerHTML = `
   <header class="prof"><button class="icon-btn" data-a="settings" aria-label="הגדרות">${ic('settings')}</button>
     ${avatar(u)}<h1>${esc(u.name)}</h1><div>${icInline('pin')} ${esc(u.city)}</div></header>
-  <div class="stats"><div class="stat"><b>${u.swaps || 0}</b><span>החלפות</span></div><div class="stat"><b>${u.rehomed || 0}</b><span>צמחים שמצאו בית</span></div><div class="stat"><b>${u.ratingCount ? Number(u.ratingAvg).toFixed(1) : '–'}</b><span>${u.ratingCount ? `דירוג (${u.ratingCount})` : 'עוד אין דירוג'}</span></div></div>
+  <div class="stats"><div class="stat"><b>${u.swaps || 0}</b><span>החלפות</span></div><div class="stat"><b>${u.rehomed || 0}</b><span>צמחים שמצאו בית</span></div><div class="stat" id="my-rating"><b>${repOf(u).count ? repOf(u).avg.toFixed(1) : '–'}</b><span>${repOf(u).count ? `דירוג (${repOf(u).count})` : 'עוד אין דירוג'}</span></div></div>
   <h2 class="section-t">הצמחים שלי</h2>
   ${S.myPlants.length ? `<div class="grid">${S.myPlants.map(p => `<button class="mini ${p.available ? '' : 'off'}" data-a="myPlantSheet" data-id="${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${p.available ? OFFER[p.offer] + (p.qty > 1 ? ' ×' + p.qty : '') : '👁️‍🗨️ מוסתר מהחיפוש'}</div></div></button>`).join('')}</div>
   ${S.myPlants.some(p => !p.available) ? `<p class="small muted" style="padding:8px 18px 0">צמח מוסתר לא מופיע לאחרים. לוחצים עליו ומדליקים "זמין" כדי להחזיר אותו.</p>` : ''}`
@@ -1337,10 +1383,8 @@ async function loadReviews() {
     const s = await getDocs(query(collection(db, 'reviews'), where('to', '==', uid())));
     const rs = s.docs.map(d => d.data()).sort((a, b) => b.t - a.t);
     const count = rs.length, avg = count ? rs.reduce((a, r) => a + (r.all || 0), 0) / count : 0;
-    if (S.profile.ratingCount !== count || Math.abs((S.profile.ratingAvg || 0) - avg) > .01) {
-      S.profile.ratingCount = count; S.profile.ratingAvg = avg;
-      updateDoc(doc(db, 'users', uid()), { ratingCount: count, ratingAvg: avg }).catch(errLog);
-    }
+    const was = S.rep[uid()]; S.rep[uid()] = { avg, count };
+    if (!was || was.count !== count) { const st = $('#my-rating'); if (st) st.innerHTML = `<b>${count ? avg.toFixed(1) : '–'}</b><span>${count ? `דירוג (${count})` : 'עוד אין דירוג'}</span>`; }
     const box = $('#reviews'); if (!box) return;
     const withText = rs.filter(r => r.text);
     if (withText.length) box.innerHTML = `<h2 class="section-t">מה אומרים עליי</h2><div class="col" style="padding:0 14px">${withText.slice(0, 5).map(r => `<div class="review"><b>${'★'.repeat(r.all || 0)}</b><p>${esc(r.text)}</p><span class="small muted">${esc(r.fromName || '')}, ${ago(r.t)}</span></div>`).join('')}</div>`;
@@ -1370,7 +1414,7 @@ function myPlantSheet(id) {
   <label class="toggle freeze ${p.frozen ? 'on' : ''}"><span><b>🔒 הקפאת המודעה</b><br><span class="small muted">שמור למישהו? המודעה תיעלם מהחיפוש ולא יוכלו לפנות עליה, עד שתבטלו.</span></span><input type="checkbox" data-change="pfrozen" data-id="${p.id}" ${p.frozen ? 'checked' : ''}></label>
   <p class="label">מה תרצו לעשות איתו?</p>
   <div class="modes">${Object.entries(MODE).map(([k, mm]) => `<button class="mode-opt ${mm.c} ${m === k ? 'on' : ''}" data-a="editPlant" data-id="${p.id}" data-k="mode" data-v="${k}"><i>${mm.i}</i><b>${MODE_ACT[k]}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
-  ${m === 'sale' ? `<p class="label">מחיר</p><div class="price-in"><input class="field" type="number" inputmode="numeric" min="1" max="99999" data-change="editPrice" data-id="${p.id}" value="${esc(p.price || '')}" placeholder="למשל 40"><span>₪</span></div>` : ''}
+  ${m === 'sale' || p._wantSale ? `<p class="label">מחיר${p._wantSale ? ' (חובה למכירה)' : ''}</p><div class="price-in"><input class="field" type="number" inputmode="numeric" min="1" max="99999" data-change="editPrice" data-id="${p.id}" value="${esc(p.price || '')}" placeholder="למשל 40"><span>₪</span></div>` : ''}
   <p class="label">מה אתם מציעים?</p>${chips('offer', OFFER)}
   <p class="label">מצב הצמח</p>${chips('condition', COND)}
   <p class="label">כמות</p><div class="stepper"><button data-a="editQty" data-id="${p.id}" data-v="1" aria-label="יותר">+</button><b id="edit-qty">${p.qty || 1}</b><button data-a="editQty" data-id="${p.id}" data-v="-1" aria-label="פחות">−</button></div>
@@ -1385,12 +1429,14 @@ function notifsSheet() {
   S.priv.alertsSeenAt = Date.now(); savePriv();
   setTimeout(refreshBadges, 50);
 }
-function filtersSheet() {
+let radiusDraft = null;
+function filtersSheet(keepDraft) {
   const f = filters, u = S.profile;
+  if (!keepDraft) radiusDraft = u.radius;
   const grp = (k, obj) => `<div class="chips" style="gap:8px"><button class="sel ${f[k] === 'all' ? 'on' : ''}" data-a="setFilter" data-k="${k}" data-v="all">הכול</button>${Object.entries(obj).map(([kk, v]) => `<button class="sel ${f[k] === kk ? 'on' : ''}" data-a="setFilter" data-k="${k}" data-v="${kk}">${v}</button>`).join('')}</div>`;
   sheet(`<h3>מה לחפש?</h3>
   <label class="toggle" style="margin-top:6px"><span><b>📍 לפי המקום שבו אני עכשיו</b><br><span class="small muted">${S.here ? `מזוהה: ${esc(S.here.city)}` : `כבוי: מחפשים לפי ${esc(u.city)}`}</span></span><input type="checkbox" data-change="liveLoc" ${S.here ? 'checked' : ''}></label>
-  <p class="label">מרחק מ${esc(locLabel())}</p><div class="chips" style="gap:8px">${RADII.map(r => `<button class="sel ${r === u.radius ? 'on' : ''}" data-a="filterRadius" data-r="${r}">${radiusLabel(r)}</button>`).join('')}</div>
+  <p class="label">מרחק מ${esc(locLabel())}</p><div class="chips" style="gap:8px">${RADII.map(r => `<button class="sel ${r === radiusDraft ? 'on' : ''}" data-a="filterRadius" data-r="${r}">${radiusLabel(r)}</button>`).join('')}</div>
   <p class="label">מה מחפשים?</p>${grp('mode', { swap: '🔄 החלפה', gift: '🎁 מתנה', sale: '🏷️ למכירה' })}
   <p class="label">סוג צמח</p>${grp('cat', CATS)}
   <p class="label">סוג החלפה</p>${grp('offer', OFFER)}
@@ -1402,7 +1448,7 @@ function meetSheet(mid) {
   const iso = new Date(now.getTime() - now.getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
   sheet(`<h3>קביעת מפגש</h3><p class="muted">${icInline('shield')} מומלץ להיפגש במקום ציבורי ומואר.</p>
   <p class="label">איפה?</p><div class="pick">${SAFE_SPOTS.map((s, i) => `<label class="pick-item"><input type="radio" name="spot" value="${esc(s + ', ' + S.profile.city)}" ${i === 0 ? 'checked' : ''}><span>${esc(s)}, ${esc(S.profile.city)}</span></label>`).join('')}</div>
-  <p class="label">מתי?</p><input type="datetime-local" class="field" id="meet-when" value="${iso}">
+  <p class="label">מתי?</p><input type="datetime-local" class="field" id="meet-when" value="${iso}" min="${new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16)}">
   <div class="err" id="meet-err"></div>
   <button class="btn hot" data-a="saveMeet" data-id="${mid}" style="margin-top:14px">${ic('calendar')} שליחת הצעת מפגש</button>`);
 }
@@ -1438,7 +1484,7 @@ VIEWS.nursery = async function (id) {
   const promos = S.promos.filter(p => p.nurseryId === id && p.active && (!p.until || p.until >= now));
   promos.forEach(countView);
   $('#view').innerHTML = `
-  <div class="detail-v nursery-cover">${n.img ? `<div class="photo"><img src="${n.img}" alt=""></div>` : `<div class="art nursery-art big">🌿</div>`}<button class="icon-btn back" data-a="back" aria-label="חזרה">${ic('back')}</button></div>
+  <div class="detail-v nursery-cover">${nurseryImg(n, 'big')}<button class="icon-btn back" data-a="back" aria-label="חזרה">${ic('back')}</button></div>
   <div class="pad">
     <span class="badge b-nursery" style="position:static;display:inline-block">🌿 משתלה</span>
     <h1 style="font-size:30px;font-weight:900;margin-top:8px">${esc(n.name)}</h1>
@@ -1460,11 +1506,12 @@ VIEWS.mynursery = async function () {
   let mine = [];
   try { const s2 = await getDocs(query(collection(db, 'promos'), where('nurseryId', '==', n.id))); mine = s2.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.t || 0) - (a.t || 0)); } catch (e) { errLog(e); }
   S.myPromos = mine;
+  await promoStats(mine);
   const views = mine.reduce((a, p) => a + (p.views || 0), 0), clicks = mine.reduce((a, p) => a + (p.clicks || 0), 0);
   $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="profile" aria-label="חזרה">${ic('back')}</button><h1>${esc(n.name)}</h1></div>
   <div class="pad" style="padding-top:0">
     ${n.active ? '' : `<div class="note">${ic('shield', 20)}<span>המשתלה עוד לא פעילה. אפשר כבר להכין הצעות, והן יופיעו למשתמשים אחרי ההפעלה.</span></div>`}
-    <div class="stats" style="margin:14px 0 0"><div class="stat"><b>${mine.filter(p => p.active).length}</b><span>הצעות פעילות</span></div><div class="stat"><b>${views}</b><span>צפיות</span></div><div class="stat"><b>${clicks}</b><span>לחיצות</span></div></div>
+    <div class="stats" style="margin:14px 0 0"><div class="stat"><b>${mine.filter(p => p.active).length}</b><span>הצעות פעילות</span></div><div class="stat"><b>${views}</b><span>אנשים שראו</span></div><div class="stat"><b>${clicks}</b><span>אנשים שלחצו</span></div></div>
     <button class="btn hot" data-a="newPromo" style="margin-top:18px">${ic('plus')} פרסום הצעה חדשה</button>
     <button class="btn ghost" data-a="editNursery">עריכת פרטי המשתלה</button>
     <h2 class="section-t" style="margin:24px 0 10px">ההצעות שלי</h2>
@@ -1479,7 +1526,7 @@ VIEWS.promonew = function () {
   if (!pd) pd = { img: null, title: '', catId: null, deal: '', text: '', until: '', radius: 25 };
   $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="mynursery" aria-label="חזרה">${ic('back')}</button><h1>הצעה חדשה</h1></div>
   <div class="pad" style="padding-top:4px">
-    ${pd.img ? `<div class="scan" style="height:220px"><img src="${pd.img}" alt=""><label class="lbl" for="pr-img" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div>` : `<label class="drop" for="pr-img" style="height:200px"><div class="big">${ic('camera', 40)}</div><h2>תמונה של ההצעה</h2></label>`}
+    ${safeImg(pd.img) ? `<div class="scan" style="height:220px"><img src="${safeImg(pd.img)}" alt=""><label class="lbl" for="pr-img" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div>` : `<label class="drop" for="pr-img" style="height:200px"><div class="big">${ic('camera', 40)}</div><h2>תמונה של ההצעה</h2></label>`}
     <input type="file" id="pr-img" accept="image/*" class="sr" data-change="promoPhoto">
     <p class="label">כותרת</p><input class="field" id="pr-title" maxlength="60" placeholder="למשל: מונסטרות ענקיות הגיעו!" value="${esc(pd.title)}">
     <p class="label">איזה צמח? (כדי שנתריע למי שמחפש אותו)</p>
@@ -1532,13 +1579,14 @@ async function adminNurseries(box) {
     apps = a.docs.map(d => ({ id: d.id, ...d.data() })); ns = b.docs.map(d => ({ id: d.id, ...d.data() })); ps = c.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) { errLog(e); box.innerHTML = adminNoAccess(); return; }
   S.adminApps = apps;
+  await promoStats(ps);
   const st = id => { const x = ps.filter(p => p.nurseryId === id); return { n: x.filter(p => p.active).length, v: x.reduce((a, p) => a + (p.views || 0), 0), c: x.reduce((a, p) => a + (p.clicks || 0), 0) }; };
   box.innerHTML = `
   <h2 class="section-t" style="margin-top:4px">בקשות הצטרפות (${apps.length})</h2>
   ${apps.length ? apps.map(a => `<div class="req"><b>${esc(a.name)}</b>, ${esc(a.city)}<div class="small">${esc(a.contact || '')}, <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>, ${esc(a.email)}</div>${a.notes ? `<div class="req-msg">"${esc(a.notes)}"</div>` : ''}
     <div class="req-btns"><button class="btn primary sm" style="flex:1" data-a="adminApprove" data-id="${a.id}">אישור והפעלה</button><button class="btn ghost sm" style="flex:1" data-a="adminDecline" data-id="${a.id}">דחייה</button></div></div>`).join('') : '<p class="muted small" style="padding:0 18px">אין בקשות חדשות.</p>'}
   <h2 class="section-t">משתלות (${ns.length})</h2>
-  <div class="list">${ns.map(n => { const x = st(n.id); return `<div class="li"><span class="thumb">${n.img ? `<div class="photo"><img src="${n.img}" alt=""></div>` : '<div class="art nursery-art">🌿</div>'}</span><div class="li-main"><div class="li-t">${esc(n.name)}</div><div class="li-s">${esc(n.ownerEmail || '')}</div><div class="small muted">${x.n} הצעות, 👁 ${x.v}, 👆 ${x.c}</div></div><label class="mini-toggle" aria-label="פעילה"><input type="checkbox" data-change="nurseryActive" data-id="${n.id}" ${n.active ? 'checked' : ''}></label></div>`; }).join('') || '<div class="empty">עוד אין משתלות.</div>'}</div>
+  <div class="list">${ns.map(n => { const x = st(n.id); return `<div class="li"><span class="thumb">${nurseryImg(n)}</span><div class="li-main"><div class="li-t">${esc(n.name)}</div><div class="li-s">${esc(n.ownerEmail || '')}</div><div class="small muted">${x.n} הצעות, 👁 ${x.v}, 👆 ${x.c}</div></div><label class="mini-toggle" aria-label="פעילה"><input type="checkbox" data-change="nurseryActive" data-id="${n.id}" ${n.active ? 'checked' : ''}></label></div>`; }).join('') || '<div class="empty">עוד אין משתלות.</div>'}</div>
   <div class="pad"><button class="btn ghost" data-a="adminAdd">${ic('plus')} הוספת משתלה ידנית</button></div>`;
 };
 // =====================================================
@@ -1612,7 +1660,7 @@ async function adminUsers(box) {
   catch (e) { errLog(e); box.innerHTML = adminNoAccess(); return; }
   S.adminUsers = list;
   const row = u => `<div class="li"><span class="thumb">${avatar(u, 'av')}</span><div class="li-main"><div class="li-t">${esc(u.name || '')}${u.banned ? ' <span class="pill st-cancelled">מושעה</span>' : ''}</div>
-    <div class="li-s">${esc(u.city || '')}, הצטרף/ה ${u.createdAt ? ago(u.createdAt) : '–'}</div><div class="small muted">נראה/תה ${u.lastSeen ? ago(u.lastSeen) : '–'}, ${u.swaps || 0} החלפות${u.ratingCount ? `, ★${Number(u.ratingAvg).toFixed(1)}` : ''}</div></div>
+    <div class="li-s">${esc(u.city || '')}, הצטרף/ה ${u.createdAt ? ago(u.createdAt) : '–'}</div><div class="small muted">נראה/תה ${u.lastSeen ? ago(u.lastSeen) : '–'}</div></div>
     <button class="btn ghost sm" data-a="adminBan" data-id="${esc(u.id)}" data-on="${u.banned ? '0' : '1'}">${u.banned ? 'ביטול השעיה' : 'השעיה'}</button></div>`;
   box.innerHTML = `<div class="sbox admin-search">${ic('search', 18)}<input id="au-q" type="search" placeholder="חיפוש לפי שם או עיר" autocomplete="off"></div>
   <p class="small muted" style="padding:6px 18px 0">${list.length} המשתמשים האחרונים שהצטרפו</p>
@@ -1655,7 +1703,8 @@ async function getIce() {
   let extra = [];
   try {
     const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3500);
-    const r = await fetch('/api/turn', { signal: ctl.signal, cache: 'no-store' }); clearTimeout(tm);
+    const tok = auth && auth.currentUser && auth.currentUser.getIdToken ? await auth.currentUser.getIdToken() : '';
+    const r = await fetch('/api/turn', { signal: ctl.signal, cache: 'no-store', headers: tok ? { Authorization: 'Bearer ' + tok } : {} }); clearTimeout(tm);
     if (r.ok) { const d = await r.json(); const x = d.iceServers; extra = Array.isArray(x) ? x : (x ? [x] : []); }
   } catch (e) { }
   iceCache = { t: Date.now(), servers: [...STUN, ...extra] };
@@ -1803,7 +1852,7 @@ function finishCall(notify, msg) {
 }
 function onIncomingCalls(sn) {
   const now = Date.now();
-  const ringing = sn.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => now - (c.t || 0) < 45000 && !isBlocked(c.from));
+  const ringing = sn.docs.map(d => ({ id: d.id, ...d.data() })).filter(c => okId(c.id) && okId(c.from) && now - (c.t || 0) < 45000 && !isBlocked(c.from));
   if (CALL.incoming && !ringing.some(c => c.id === CALL.incoming.id)) { stopRing(); CALL.incoming = null; CALL.other = null; hideCallUI(); toast('📞 שיחה שלא נענתה'); }
   const c = ringing[0];
   if (!c) return;
@@ -1867,11 +1916,11 @@ async function sendVoice(mid, url, dur) {
 }
 let player = null, playingId = null;
 function playVoice(id) {
-  const x = S.msgs.find(y => y.id === id); if (!x || !x.audio) return;
+  const x = S.msgs.find(y => y.id === id); if (!x || !safeAudio(x.audio)) { toast('לא הצלחנו לנגן את ההקלטה.'); return; }
   const btns = () => $$('[data-a=vplay]');
   if (playingId === id && player && !player.paused) { player.pause(); return; }
   if (player) { player.pause(); }
-  player = new Audio(x.audio); playingId = id; player.setAttribute('playsinline', '');
+  player = new Audio(safeAudio(x.audio)); playingId = id; player.setAttribute('playsinline', '');
   const setIcon = (pid, on) => { const b = btns().find(e => e.dataset.id === pid); if (b) b.innerHTML = ic(on ? 'pause' : 'play', 18); };
   btns().forEach(b => { b.innerHTML = ic('play', 18); });
   player.ontimeupdate = () => { const bar = $('#vb-' + id); if (bar && player.duration) bar.style.width = Math.min(100, player.currentTime / player.duration * 100) + '%'; };
@@ -1919,6 +1968,7 @@ const A = {
   open: el => { closeSheet(); $('#overlay').classList.remove('open'); go(el.dataset.to); },
   back: () => { if (history.length > 1) history.back(); else go('discover'); },
   closeSheet,
+  reload: () => location.reload(),
   closeOverlay: () => $('#overlay').classList.remove('open'),
   invite: async () => {
     const data = { title: APP_NAME, text: 'בואו להחליף איתי צמחים ב-LeafLoop 🌿', url: location.origin + location.pathname };
@@ -1934,25 +1984,37 @@ const A = {
       if (lastSwipe.a === 'save') S.priv.savedPromos = (S.priv.savedPromos || []).filter(x => x !== lastSwipe.promo);
       lastSwipe = null; savePriv(); renderDeck(); return;
     }
-    delete S.priv.swipes[lastSwipe.id];
-    if (lastSwipe.a === 'save') S.priv.saved = S.priv.saved.filter(x => x !== lastSwipe.id);
+    const ls = lastSwipe;
+    if ((ls.a === 'like' || ls.a === 'super') && inActiveMatch(ls.id)) { toast('כבר נוצרה התאמה על הצמח הזה. אפשר לבטל אותה מהצ׳אט.'); lastSwipe = null; renderDeck(); return; }
+    delete S.priv.swipes[ls.id];
+    if (ls.a === 'save') S.priv.saved = S.priv.saved.filter(x => x !== ls.id);
+    if (ls.a === 'like' || ls.a === 'super') {
+      deleteDoc(doc(db, 'likes', uid() + '_' + ls.id)).catch(errLog);
+      S.outgoing.filter(r => r.target === ls.id && r.status === 'pending').forEach(r => deleteDoc(doc(db, 'requests', r.id)).catch(errLog));
+      closeSheet();
+    }
     lastSwipe = null; savePriv(); renderDeck();
   },
   refresh: async el => { busy(el, true, ''); try { await loadPool(true); } catch (e) { errLog(e); toast('הרענון לא הצליח.'); } (VIEWS[curRoute()[0]] || VIEWS.discover)(); },
   searchMode: el => { SQ.mode = el.dataset.k; $$('.mchips .sel').forEach(b => b.classList.toggle('on', b === el)); renderResults(); },
   clearSearch: () => { SQ.q = ''; VIEWS.discover(); },
-  searchFar: () => { S.profile.radius = 500; updateDoc(doc(db, 'users', uid()), { radius: 500 }).catch(errLog); VIEWS.discover(); },
+  searchFar: () => { SQ.far = true; renderResults(); },
+  nearOnly: () => { SQ.far = false; renderResults(); },
   wishFromSearch: async el => {
     const c = toCat(SQ.q); if (!c) return;
     busy(el, true);
     try { await updateDoc(doc(db, 'users', uid()), { wishlist: arrayUnion(c.id) }); S.profile.wishlist = [...new Set([...(S.profile.wishlist || []), c.id])]; toast(`🔔 נודיע לך כשמישהו יעלה ${c.he}`); el.outerHTML = '<p class="small">✓ נוסף לרשימת המשאלות</p>'; }
     catch (e) { errLog(e); busy(el, false); toast('לא הצליח. נסו שוב.'); }
   },
-  resetPasses: () => { Object.keys(S.priv.swipes).forEach(k => { if (S.priv.swipes[k] === 'pass') delete S.priv.swipes[k]; }); savePriv(); renderDeck(); },
+  resetPasses: () => { Object.keys(S.priv.swipes).forEach(k => { if (String(S.priv.swipes[k]).startsWith('pass')) delete S.priv.swipes[k]; }); savePriv(); renderDeck(); },
   filters: filtersSheet,
-  setFilter: el => { filters[el.dataset.k] = el.dataset.v; saveFilters(); filtersSheet(); },
-  filterRadius: el => { S.profile.radius = +el.dataset.r; filtersSheet(); },
-  applyFilters: () => { closeSheet(); updateDoc(doc(db, 'users', uid()), { radius: S.profile.radius }).catch(errLog); route(); },
+  setFilter: el => { filters[el.dataset.k] = el.dataset.v; saveFilters(); filtersSheet(true); },
+  filterRadius: el => { radiusDraft = +el.dataset.r; $$('#sheet [data-a=filterRadius]').forEach(b => b.classList.toggle('on', b === el)); },
+  applyFilters: () => {
+    closeSheet();
+    if (radiusDraft && radiusDraft !== S.profile.radius) { S.profile.radius = radiusDraft; updateDoc(doc(db, 'users', uid()), { radius: radiusDraft }).catch(errLog); }
+    route();
+  },
   notifs: notifsSheet,
   notifGo: el => { closeSheet(); if (el.dataset.to) go(el.dataset.to); },
   likeDetail: async el => { const p = S.pool.find(x => x.id === el.dataset.id); if (!p) return; S.priv.swipes[p.id] = 'like'; savePriv(); busy(el, true); await afterLike(p, false); busy(el, false); },
@@ -1993,6 +2055,7 @@ const A = {
   saveMeet: async el => {
     const place = ($('#sheet input[name=spot]:checked') || {}).value, when = $('#meet-when').value;
     if (!when) { $('#meet-err').textContent = 'בחרו תאריך ושעה.'; return; }
+    if (new Date(when).getTime() < Date.now() - 5 * 60e3) { $('#meet-err').textContent = 'אי אפשר לקבוע מפגש בעבר. בחרו תאריך ושעה עתידיים.'; return; }
     const m = S.matches.find(x => x.id === el.dataset.id);
     busy(el, true);
     try {
@@ -2014,13 +2077,19 @@ const A = {
     const m = S.matches.find(x => x.id === el.dataset.id);
     busy(el, true, 'שולחים…');
     try {
-      await addDoc(collection(db, 'reviews'), { matchId: m.id, from: uid(), fromName: S.profile.name, to: otherId(m), ...rateVals, text: $('#rev-txt').value.trim(), t: Date.now() });
+      await setDoc(doc(db, 'reviews', m.id + '_' + uid()), { matchId: m.id, from: uid(), fromName: S.profile.name, to: otherId(m), ...rateVals, text: $('#rev-txt').value.trim().slice(0, 400), t: Date.now() });
       await updateDoc(doc(db, 'matches', m.id), { rated: arrayUnion(uid()) });
       closeSheet(); toast('תודה! הדירוג נשמר.');
     } catch (e) { errLog(e); busy(el, false); $('#rate-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
   },
   chatMenu: el => chatMenu(el.dataset.id),
-  unblock: el => { S.priv.blocked = (S.priv.blocked || []).filter(x => x !== el.dataset.id); savePriv(); toast('החסימה בוטלה'); settingsSheet(); },
+  unblock: el => {
+    const id = el.dataset.id;
+    S.priv.blocked = (S.priv.blocked || []).filter(x => x !== id); savePriv();
+    deleteDoc(doc(db, 'blocks', uid() + '_' + id)).catch(errLog);
+    S.matches.filter(x => x.users.includes(id) && x.blockedBy === uid()).forEach(x => updateDoc(doc(db, 'matches', x.id), { blockedBy: null }).catch(errLog));
+    toast('החסימה בוטלה'); settingsSheet();
+  },
   freezeToggle: el => { const pl = S.myPlants.find(x => x.id === el.dataset.id); if (!pl) return; setFrozen(pl.id, !pl.frozen); closeSheet(); },
   reportSheet: el => reportSheet(el.dataset.id),
   sendReport: async el => {
@@ -2034,8 +2103,10 @@ const A = {
   block: async el => {
     const m = S.matches.find(x => x.id === el.dataset.id); const n = otherInfo(m).name;
     if (!confirm(`לחסום את ${n}? לא תראו יותר את הצמחים וההודעות שלו/ה, וההחלפה ביניכם תבוטל.`)) return;
-    S.priv.blocked = [...new Set([...(S.priv.blocked || []), otherId(m)])]; savePriv();
-    if (!['swapped', 'cancelled'].includes(m.status)) updateDoc(doc(db, 'matches', m.id), { status: 'cancelled' }).catch(errLog);
+    const o = otherId(m);
+    S.priv.blocked = [...new Set([...(S.priv.blocked || []), o])]; savePriv();
+    setDoc(doc(db, 'blocks', uid() + '_' + o), { by: uid(), user: o, t: Date.now() }).catch(errLog);
+    S.matches.filter(x => x.users.includes(o) && !x.blockedBy).forEach(x => updateDoc(doc(db, 'matches', x.id), { status: x.status === 'swapped' ? 'swapped' : 'cancelled', blockedBy: uid() }).catch(errLog));
     closeSheet(); toast(`${n} נחסם/ה`); go('matches');
   },
 
@@ -2190,6 +2261,8 @@ const A = {
       const pp = { ownerName: name };
       if (patch.city) Object.assign(pp, { city: patch.city, lat: patch.lat, lng: patch.lng });
       S.myPlants.forEach(p => b.update(doc(db, 'plants', p.id), pp));
+      const info = pubInfo({ ...S.profile, ...patch });
+      S.matches.filter(m => !m.blockedBy && m.status !== 'cancelled').slice(0, 300).forEach(m => b.update(doc(db, 'matches', m.id), { [`info.${uid()}`]: info }));
       await b.commit();
       Object.assign(S.profile, patch);
       closeSheet(); VIEWS.profile(); toast('ההגדרות נשמרו');
@@ -2207,16 +2280,19 @@ const A = {
     const me = uid();
     try {
       if (!fresh) await reauthenticateWithPopup(auth.currentUser, new GoogleAuthProvider());
-      const b = writeBatch(db);
-      S.myPlants.forEach(p => { b.delete(doc(db, 'plants', p.id)); if (p.hasPhoto) b.delete(doc(db, 'photos', p.id)); });
-      const lk = await getDocs(query(collection(db, 'likes'), where('from', '==', me)));
-      lk.docs.forEach(d => b.delete(d.ref));
-      S.outgoing.forEach(r => b.delete(doc(db, 'requests', r.id)));
-      S.matches.forEach(m => b.update(doc(db, 'matches', m.id), { [`info.${me}`]: { name: 'משתמש/ת שמחק/ה חשבון', color: '#999999', photo: null, city: '' }, status: m.status === 'swapped' ? 'swapped' : 'cancelled' }));
-      b.delete(doc(db, 'users', me, 'private', 'state'));
-      b.delete(doc(db, 'users', me));
+      const ops = [];
+      const del = ref => ops.push(b => b.delete(ref));
+      S.myPlants.forEach(p => { del(doc(db, 'plants', p.id)); if (p.hasPhoto) del(doc(db, 'photos', p.id)); });
+      const q = async (c, f, v) => { try { return (await getDocs(query(collection(db, c), where(f, '==', v)))).docs; } catch (e) { errLog(e); return []; } };
+      const [lkFrom, lkTo, rqFrom, rqTo, rvFrom, clFrom, clTo, blk] = await Promise.all([
+        q('likes', 'from', me), q('likes', 'to', me), q('requests', 'from', me), q('requests', 'to', me),
+        q('reviews', 'from', me), q('calls', 'from', me), q('calls', 'to', me), q('blocks', 'by', me)]);
+      [...lkFrom, ...lkTo, ...rqFrom, ...rqTo, ...rvFrom, ...clFrom, ...clTo, ...blk].forEach(d => del(d.ref));
+      S.matches.filter(m => !m.blockedBy || m.blockedBy === me).forEach(m => ops.push(b => b.update(doc(db, 'matches', m.id), { [`info.${me}`]: { name: 'משתמש/ת שמחק/ה חשבון', color: '#999999', photo: null, city: '' }, status: m.status === 'swapped' ? 'swapped' : 'cancelled' })));
+      del(doc(db, 'users', me, 'private', 'state'));
+      del(doc(db, 'users', me));
       unsubAll();
-      await b.commit();
+      for (let i = 0; i < ops.length; i += 400) { const b = writeBatch(db); ops.slice(i, i + 400).forEach(f => f(b)); await b.commit(); }
       await deleteUser(auth.currentUser);
       closeSheet(); toast('החשבון נמחק. תודה שהייתם איתנו 🌿');
     } catch (e) {
@@ -2248,6 +2324,8 @@ const A = {
     const p = S.myPlants.find(x => x.id === el.dataset.id); if (!p) return;
     const k = el.dataset.k, v = el.dataset.v;
     if (p[k] === v) return;
+    if (k === 'mode' && v === 'sale' && !(p.price > 0)) { p._wantSale = true; myPlantSheet(p.id); toast('כתבו מחיר, והמודעה תעבור למכירה.'); setTimeout(() => { const i = $('#sheet [data-change=editPrice]'); if (i) i.focus(); }, 300); return; }
+    p._wantSale = false;
     const prev = p[k]; p[k] = v;
     $$(`#sheet [data-a=editPlant][data-k=${k}]`).forEach(b => b.classList.toggle('on', b === el));
     if (k === 'mode' && (v === 'sale' || prev === 'sale')) setTimeout(() => myPlantSheet(p.id), 0);
@@ -2304,12 +2382,16 @@ document.addEventListener('change', async e => {
   if (k === 'pfrozen') setFrozen(el.dataset.id, el.checked);
   if (k === 'editPrice') {
     const pl = S.myPlants.find(x => x.id === el.dataset.id); const v = Math.round(+el.value || 0);
-    if (pl && v > 0 && v !== pl.price) { pl.price = v; updateDoc(doc(db, 'plants', pl.id), { price: v }).then(() => toast(`המחיר עודכן: ₪${v}`)).catch(errLog); }
+    if (pl && v > 0 && (v !== pl.price || pl._wantSale)) {
+      const patch = pl._wantSale ? { price: v, mode: 'sale' } : { price: v };
+      Object.assign(pl, patch); pl._wantSale = false;
+      updateDoc(doc(db, 'plants', pl.id), patch).then(() => { toast(patch.mode ? `עבר למכירה: ₪${v} 🏷️` : `המחיר עודכן: ₪${v}`); if (patch.mode) myPlantSheet(pl.id); }).catch(errLog);
+    }
   }
   if (k === 'liveLoc') {
     if (el.checked) { lsSet('ll_live', '1'); locate(true); }
     else { lsSet('ll_live', '0'); S.here = null; }
-    setTimeout(filtersSheet, el.checked ? 1500 : 0);
+    setTimeout(() => filtersSheet(true), el.checked ? 1500 : 0);
   }
   if (k === 'promoActive') updateDoc(doc(db, 'promos', el.dataset.id), { active: el.checked }).then(() => toast(el.checked ? 'ההצעה פעילה' : 'ההצעה הוסתרה')).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
   if (k === 'nurseryActive') updateDoc(doc(db, 'nurseries', el.dataset.id), { active: el.checked }).then(() => toast(el.checked ? 'המשתלה הופעלה' : 'המשתלה הושהתה')).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
@@ -2351,6 +2433,7 @@ document.addEventListener('keydown', e => {
   }
 });
 window.addEventListener('hashchange', route);
+document.addEventListener('error', e => { const t = e.target; if (t && t.classList && t.classList.contains('av-img')) t.remove(); }, true);
 window.addEventListener('online', () => toast('חזרתם לאינטרנט 🌿'));
 window.addEventListener('offline', () => toast('אין חיבור לאינטרנט. השינויים יישמרו כשתתחברו.'));
 
@@ -2382,7 +2465,7 @@ else {
       route();
     } catch (e) {
       errLog(e);
-      $('#view').innerHTML = `<div class="empty" style="padding-top:30vh"><h3>לא הצלחנו להתחבר לשרת</h3><p>בדקו את החיבור לאינטרנט ונסו שוב.</p><button class="btn hot sm" onclick="location.reload()" style="margin:auto">ניסיון חוזר</button></div>`;
+      $('#view').innerHTML = `<div class="empty" style="padding-top:30vh"><h3>לא הצלחנו להתחבר לשרת</h3><p>בדקו את החיבור לאינטרנט ונסו שוב.</p><button class="btn hot sm" data-a="reload" style="margin:auto">ניסיון חוזר</button></div>`;
     }
   });
 }
