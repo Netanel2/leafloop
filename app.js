@@ -104,9 +104,15 @@ function savePriv() {
 }
 
 // ---------- עזרים ----------
-const catById = id => CATALOG.find(c => c.id === id) || { id, he: id || 'צמח', sci: '', cat: 'house', art: 'leafy' };
+const cleanName = t => String(t || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+const catById = id => {
+  if (typeof id === 'string' && id.startsWith('n:')) return { id, he: id.slice(2), sci: '', cat: 'house', art: 'leafy', custom: true };
+  return CATALOG.find(c => c.id === id) || { id, he: id || 'צמח', sci: '', cat: 'house', art: 'leafy' };
+};
 const pName = p => (p ? catById(p.catId).he : '');
-const catByName = n => { const q = String(n || '').trim().toLowerCase(); return CATALOG.find(c => c.he.toLowerCase() === q || c.sci.toLowerCase() === q); };
+const catByName = n => { const q = cleanName(n).toLowerCase(); return CATALOG.find(c => c.he.toLowerCase() === q || c.sci.toLowerCase() === q); };
+// שם חופשי: אם יש התאמה מדויקת לקטלוג משתמשים בה, אחרת שומרים את מה שנכתב
+const toCat = n => { const c = catByName(n); if (c) return c; const t = cleanName(n); return t ? catById('n:' + t) : null; };
 function km(a, b) {
   if (!a || !b || a.lat == null || b.lat == null) return 9999;
   const R = 6371, t = x => x * Math.PI / 180;
@@ -654,7 +660,7 @@ function cardHTML(it, i) {
       <span class="stamp s-like">${gift ? 'אשמח!' : 'מעוניין'}</span><span class="stamp s-pass">לא בשבילי</span><span class="stamp s-super">סופר!</span></div>
     <div class="card-info">
       <div class="row sb"><h2>${esc(pName(p))}</h2><button class="icon-btn" data-a="open" data-to="plant/${p.id}" aria-label="פרטים נוספים">${ic('eye')}</button></div>
-      <p class="sci">${esc(catById(p.catId).sci)}</p>
+      ${catById(p.catId).sci ? `<p class="sci">${esc(catById(p.catId).sci)}</p>` : ''}
       <div class="chips"><span class="chip">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}</span><span class="chip">${ic('pin', 14)}${fmtKm(dist(p))}</span><span class="chip">${esc(u.name)} ${rating(u)}</span></div>
       ${gift ? `<p class="wants-l">${esc(u.name)} מוסר/ת את זה בלי תמורה 💛</p><div class="chips"><span class="chip open">רק לבקש</span></div>`
         : `<p class="wants-l">${modeOf(p) === 'both' ? 'אפשר במתנה, או בתמורה ל:' : 'רוצה בתמורה'}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
@@ -980,9 +986,9 @@ VIEWS.add = function () {
     const c = d.catId ? catById(d.catId) : null;
     html += d.img ? `<div class="scan" style="height:240px"><img src="${d.img}" alt="התמונה שלך"><label class="lbl" for="gal2" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div><input type="file" id="gal2" accept="image/*" class="sr" data-change="photo">` : '';
     html += `<p class="label">איזה צמח זה?</p>
-    <input class="field" id="plant-name" data-suggest="name" placeholder="התחילו להקליד, למשל: מונסטרה" value="${esc(c ? c.he : '')}" data-change="plantName" autocomplete="off" enterkeyhint="done">
+    <input class="field" id="plant-name" data-suggest="name" placeholder="כתבו את השם, למשל: מונסטרה מונקי" value="${esc(c ? c.he : '')}" data-change="plantName" autocomplete="off" enterkeyhint="done">
     <div class="sugg" id="plant-name-sugg"></div>
-    ${c ? `<p class="sci" style="margin-top:6px">${esc(c.sci)}</p>` : ''}
+    ${c && c.sci ? `<p class="sci" style="margin-top:6px">${esc(c.sci)}</p>` : `<p class="small muted" style="margin-top:6px">אפשר לכתוב כל שם. ההצעות הן רק לעזרה.</p>`}
     <div class="err" id="add-err"></div>
     <p class="label">מה תרצו לעשות איתו?</p>
     <div class="modes">${Object.entries(MODE).map(([k, m]) => `<button class="mode-opt ${m.c} ${d.mode === k ? 'on' : ''}" data-a="draftSet" data-k="mode" data-v="${k}"><i>${m.i}</i><b>${k === 'swap' ? 'להחליף' : k === 'gift' ? 'למסור במתנה' : 'גם וגם'}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
@@ -996,7 +1002,7 @@ VIEWS.add = function () {
     <div class="row"><input class="field" id="want-in" data-suggest="want" placeholder="למשל: פילודנדרון" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWant">הוספה</button></div>
     <div class="sugg" id="want-in-sugg"></div>
     <div class="err" id="want-err"></div>
-    <div class="chips">${d.wants.map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWant" data-id="${w}" aria-label="הסרה">×</button></span>`).join('')}</div>
+    <div class="chips">${d.wants.map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWant" data-id="${esc(w)}" aria-label="הסרה">×</button></span>`).join('')}</div>
     <p class="small muted" style="margin-top:6px">הצמחים האלה יתווספו לרשימת המשאלות שלכם.</p>
     </div>
     <div style="margin-top:22px"><button class="btn hot" data-a="savePlant">${ic('check')} פרסום הצמח</button><button class="btn ghost" data-a="cancelAdd">ביטול</button></div>`;
@@ -1005,12 +1011,12 @@ VIEWS.add = function () {
 };
 function keepName() {
   const inp = $('#plant-name'); if (!inp || !draft) return;
-  const c = catByName(inp.value); if (c) draft.catId = c.id;
+  const c = toCat(inp.value); draft.catId = c ? c.id : null;
   const o = $('#open'); if (o) draft.open = o.checked;
 }
 async function savePlant(el) {
   keepName();
-  if (!draft.catId) { $('#add-err').textContent = 'בחרו את שם הצמח מההצעות שמופיעות כשמקלידים.'; $('#plant-name').focus(); return; }
+  if (!draft.catId) { $('#add-err').textContent = 'כתבו את שם הצמח.'; $('#plant-name').focus(); return; }
   busy(el, true, 'מפרסמים…');
   try {
     const ref = doc(collection(db, 'plants'));
@@ -1180,7 +1186,7 @@ VIEWS.profile = function () {
   <div class="addwish"><input class="field" id="wish-in" data-suggest="wish" placeholder="איזה צמח אתם מחפשים?" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWish">הוספה</button></div>
   <div class="sugg" id="wish-in-sugg" style="margin:0 18px"></div>
   <div class="err" id="wish-err" style="padding:0 18px"></div>
-  <div class="wishchips chips">${(u.wishlist || []).map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWish" data-id="${w}" aria-label="הסרה">×</button></span>`).join('') || '<span class="muted small">הוסיפו צמחים, ונתריע כשמישהו באזור מציע אותם.</span>'}</div>
+  <div class="wishchips chips">${(u.wishlist || []).map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWish" data-id="${esc(w)}" aria-label="הסרה">×</button></span>`).join('') || '<span class="muted small">הוסיפו צמחים, ונתריע כשמישהו באזור מציע אותם.</span>'}</div>
   ${saved.length || savedPr.length ? `<h2 class="section-t">שמורים</h2><div class="strip">${saved.map(miniCard).join('')}${savedPr.map(pr => `<button class="mini" data-a="promo" data-id="${pr.id}"><div class="mv">${promoVisual(pr)}<span class="mode m-both">🌿 משתלה</span></div><div class="mt">${esc(pr.title)}<div class="ms">${esc(pr.nurseryName)}</div></div></button>`).join('')}</div>` : ''}
   <h2 class="section-t">היסטוריית החלפות</h2>
   ${history.length ? `<div class="list">${history.map(matchRow).join('')}</div>` : '<p class="muted small" style="padding:0 18px">החלפות שתשלימו יופיעו כאן.</p>'}
@@ -1226,6 +1232,7 @@ function myPlantSheet(id) {
   const m = modeOf(p);
   const chips = (k, obj) => `<div class="chips" style="gap:8px">${Object.entries(obj).map(([kk, v]) => `<button class="sel ${p[k] === kk ? 'on' : ''}" data-a="editPlant" data-id="${p.id}" data-k="${k}" data-v="${kk}">${v}</button>`).join('')}</div>`;
   sheet(`<div class="row" style="margin-bottom:6px"><span class="thumb" style="width:60px;height:60px">${visual(p)}</span><div><h3 style="margin:0">${esc(pName(p))}</h3><div class="small muted">כל שינוי נשמר מיד</div></div></div>
+  <p class="label">שם הצמח</p><input class="field" id="edit-name" data-suggest="editname" data-change="editName" data-id="${p.id}" value="${esc(pName(p))}" autocomplete="off" enterkeyhint="done"><div class="sugg" id="edit-name-sugg"></div>
   <p class="label">מה תרצו לעשות איתו?</p>
   <div class="modes">${Object.entries(MODE).map(([k, mm]) => `<button class="mode-opt ${mm.c} ${m === k ? 'on' : ''}" data-a="editPlant" data-id="${p.id}" data-k="mode" data-v="${k}"><i>${mm.i}</i><b>${MODE_ACT[k]}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
   <p class="label">מה אתם מציעים?</p>${chips('offer', OFFER)}
@@ -1351,7 +1358,7 @@ function keepPromo() {
   if (!pd) return;
   const g = id => ($('#' + id) || {}).value;
   pd.title = g('pr-title') ?? pd.title; pd.deal = g('pr-deal') ?? pd.deal; pd.text = g('pr-text') ?? pd.text; pd.until = g('pr-until') ?? pd.until;
-  const c = catByName(g('pr-cat')); if (c) pd.catId = c.id;
+  const c = toCat(g('pr-cat')); pd.catId = c ? c.id : null;
 }
 function nurseryEditSheet() {
   const n = S.myNursery;
@@ -1480,8 +1487,8 @@ const A = {
   draftSet: el => { keepName(); draft[el.dataset.k] = el.dataset.v; VIEWS.add(); },
   qty: el => { draft.qty = Math.max(1, Math.min(99, draft.qty + +el.dataset.v)); $('#qty').textContent = draft.qty; },
   addWant: () => {
-    const c = catByName($('#want-in').value);
-    if (!c) { $('#want-err').textContent = 'בחרו צמח מההצעות שמופיעות כשמקלידים.'; return; }
+    const c = toCat($('#want-in').value);
+    if (!c) { $('#want-err').textContent = 'כתבו שם של צמח.'; return; }
     keepName();
     if (!draft.wants.includes(c.id)) draft.wants.push(c.id);
     VIEWS.add();
@@ -1562,6 +1569,7 @@ const A = {
     else if (kind === 'want') A.addWant();
     else if (kind === 'wish') A.addWish();
     else if (kind === 'promo') { keepPromo(); }
+    else if (kind === 'editname') { inp.dispatchEvent(new Event('change', { bubbles: true })); inp.blur(); }
   },
 
   // מיקום
@@ -1707,8 +1715,8 @@ const A = {
     }
   },
   addWish: async () => {
-    const c = catByName($('#wish-in').value);
-    if (!c) { $('#wish-err').textContent = 'בחרו צמח מההצעות שמופיעות כשמקלידים.'; return; }
+    const c = toCat($('#wish-in').value);
+    if (!c) { $('#wish-err').textContent = 'כתבו שם של צמח.'; return; }
     if ((S.profile.wishlist || []).includes(c.id)) { $('#wish-in').value = ''; return; }
     try {
       await updateDoc(doc(db, 'users', uid()), { wishlist: arrayUnion(c.id) });
@@ -1771,7 +1779,13 @@ document.addEventListener('change', async e => {
       draft.step = 'details'; VIEWS.add();
     } catch (err) { toast('לא הצלחנו לקרוא את התמונה. נסו תמונה אחרת.'); }
   }
-  if (k === 'plantName') { const c = catByName(el.value); if (c) { draft.catId = c.id; $('#add-err').textContent = ''; } }
+  if (k === 'plantName') { const c = toCat(el.value); draft.catId = c ? c.id : null; const e2 = $('#add-err'); if (e2) e2.textContent = ''; }
+  if (k === 'editName') {
+    const pl = S.myPlants.find(x => x.id === el.dataset.id); const c = toCat(el.value);
+    if (!pl || !c || c.id === pl.catId) return;
+    const prev = pl.catId; pl.catId = c.id;
+    updateDoc(doc(db, 'plants', pl.id), { catId: c.id }).then(() => toast('השם עודכן ✓')).catch(e2 => { errLog(e2); pl.catId = prev; toast('השמירה לא הצליחה.'); });
+  }
   if (k === 'open') draft.open = el.checked;
   if (k === 'chatImg' && el.files[0]) { try { sendMsg(el.dataset.id, '', await compress(el.files[0], 680, .7)); } catch (err) { toast('לא הצלחנו לשלוח את התמונה.'); } }
   if (k === 'avail') updateDoc(doc(db, 'plants', el.dataset.id), { available: el.checked }).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
@@ -1804,17 +1818,19 @@ document.addEventListener('input', e => {
     const box = $('#' + t.id + '-sugg'); if (!box) return;
     const q = t.value.trim().toLowerCase();
     const res = q ? CATALOG.filter(c => c.he.toLowerCase().includes(q) || c.sci.toLowerCase().includes(q)).slice(0, 6) : [];
-    box.innerHTML = res.map(c => `<button type="button" data-a="pickSugg" data-for="${t.id}" data-v="${esc(c.he)}"><b>${esc(c.he)}</b><span>${esc(c.sci)}</span></button>`).join('');
+    const typed = cleanName(t.value), exact = catByName(typed);
+    box.innerHTML = res.map(c => `<button type="button" data-a="pickSugg" data-for="${t.id}" data-v="${esc(c.he)}"><b>${esc(c.he)}</b><span>${esc(c.sci)}</span></button>`).join('')
+      + (typed && !exact && (t.dataset.suggest !== 'name' || res.length) ? `<button type="button" class="typed" data-a="pickSugg" data-for="${t.id}" data-v="${esc(typed)}"><b>✓ להשתמש ב"${esc(typed)}"</b><span></span></button>` : '');
   }
 });
 document.addEventListener('keydown', e => {
   const t = e.target;
   if (e.key === 'Enter' && t.dataset && t.dataset.suggest) {
     e.preventDefault();
-    const first = $('#' + t.id + '-sugg button'); if (first) first.click();
-    else if (t.dataset.suggest === 'want') A.addWant();
+    const box = $('#' + t.id + '-sugg'); if (box) box.innerHTML = '';
+    if (t.dataset.suggest === 'want') A.addWant();
     else if (t.dataset.suggest === 'wish') A.addWish();
-    else t.blur();
+    else { t.dispatchEvent(new Event('change', { bubbles: true })); t.blur(); }
   }
 });
 window.addEventListener('hashchange', route);

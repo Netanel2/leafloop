@@ -449,3 +449,4 @@ input,textarea,select{font-size:16px}
   .act{width:48px;height:48px}.act.like{width:58px;height:58px}.act.save,.act.undo{width:40px;height:40px}
 }
 .ask-art{background:#DDF7C2}
+.sugg button.typed{border-style:dashed;border-color:var(--leaf);color:var(--jungle)}
