@@ -5,6 +5,10 @@ service cloud.firestore {
     function signed() { return request.auth != null; }
     function me() { return request.auth.uid; }
     function matchUsers(id) { return get(/databases/$(database)/documents/matches/$(id)).data.users; }
+    function email() { return request.auth.token.email.lower(); }
+    // מנהל האפליקציה (אותו אימייל כמו ADMIN_EMAILS ב-app.js)
+    function isAdmin() { return signed() && request.auth.token.email_verified == true && email() in ['netanelkk9@gmail.com']; }
+    function ownsNursery(nid) { return get(/databases/$(database)/documents/nurseries/$(nid)).data.ownerEmail == email(); }
 
     // פרופילים: כולם רואים, רק הבעלים משנה
     match /users/{uid} {
@@ -61,6 +65,32 @@ service cloud.firestore {
       allow create: if signed() && request.resource.data.from == me()
         && me() in matchUsers(request.resource.data.matchId)
         && request.resource.data.to in matchUsers(request.resource.data.matchId);
+    }
+
+    // משתלות: כולם רואים. רק המנהל יוצר, מפעיל ומשהה. בעל/ת המשתלה מעדכן/ת פרטים.
+    match /nurseries/{id} {
+      allow read: if signed();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (signed() && resource.data.ownerEmail == email()
+        && request.resource.data.ownerEmail == resource.data.ownerEmail
+        && request.resource.data.active == resource.data.active);
+    }
+
+    // הצעות של משתלות: כולם רואים. רק בעל/ת המשתלה מפרסם/ת. כל משתמש יכול רק להוסיף צפייה או לחיצה.
+    match /promos/{id} {
+      allow read: if signed();
+      allow create: if signed() && request.resource.data.ownerEmail == email() && ownsNursery(request.resource.data.nurseryId);
+      allow update: if isAdmin()
+        || (signed() && resource.data.ownerEmail == email() && request.resource.data.ownerEmail == email())
+        || (signed() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views', 'clicks']));
+      allow delete: if isAdmin() || (signed() && resource.data.ownerEmail == email());
+    }
+
+    // בקשות הצטרפות של משתלות
+    match /nurseryApplications/{id} {
+      allow create: if signed() && request.resource.data.uid == me() && request.resource.data.email == email();
+      allow read: if isAdmin() || (signed() && resource.data.uid == me());
+      allow update, delete: if isAdmin();
     }
 
     // דיווחים: אפשר רק לשלוח

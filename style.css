@@ -8,7 +8,7 @@
   --font-d:'Rubik',system-ui,sans-serif; --font-b:'Heebo',system-ui,sans-serif;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;overflow-x:hidden;background:var(--jungle);color:var(--ink);font-family:var(--font-b);font-size:16px;line-height:1.5}
+html,body{margin:0;overflow-x:hidden;-webkit-text-size-adjust:100%;background:var(--jungle);color:var(--ink);font-family:var(--font-b);font-size:16px;line-height:1.5}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;border:0;background:none;padding:0}
 img{max-width:100%;display:block}
@@ -224,6 +224,8 @@ h1,h2,h3{font-family:var(--font-d);margin:0;line-height:1.15}
 /* ---------- Sheet ---------- */
 #sheet-wrap{position:fixed;inset:0;z-index:60;pointer-events:none}
 #sheet-bg{position:absolute;inset:0;background:rgba(7,59,42,.5);opacity:0;transition:opacity .2s}
+#sheet .sheet-x{position:absolute;z-index:5;box-shadow:0 2px 8px rgba(7,59,42,.2);top:12px;inset-inline-end:14px;width:36px;height:36px;border-radius:50%;background:var(--card);display:grid;place-items:center;color:var(--muted)}
+#sheet h3{padding-inline-end:44px}
 #sheet{position:absolute;bottom:0;left:50%;width:min(480px,100%);max-height:88dvh;overflow-y:auto;background:var(--bg);border-radius:28px 28px 0 0;padding:10px 18px calc(22px + env(safe-area-inset-bottom));transform:translate(-50%,100%);transition:transform .28s cubic-bezier(.2,.8,.2,1)}
 #sheet:focus{outline:none}
 #sheet::before{content:"";display:block;width:44px;height:5px;border-radius:3px;background:var(--line);margin:0 auto 14px}
@@ -320,3 +322,84 @@ button:disabled{cursor:default}
 .review p{margin:4px 0}
 .chat-h .icon-btn:last-child{width:40px}
 .chat-h .pill{flex:none}
+
+/* הצעות שמות צמחים (במקום datalist, שעובד גרוע באייפון) */
+.sugg{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.sugg:empty{display:none}
+.sugg button{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;border-radius:var(--r-sm);background:var(--card);border:2px solid var(--line);text-align:start;font-size:15px}
+.sugg button span{font-size:12px;color:var(--muted);font-style:italic;direction:ltr}
+.sugg button:active{border-color:var(--leaf)}
+.loading p{margin:0}
+input,textarea,select{font-size:16px}
+
+/* מסכים נמוכים (רוב האייפונים בספארי): הכול נכנס בלי גלילה */
+@media (max-height:780px){
+  .hero{padding:14px 18px 80px}
+  .hero h1{font-size:24px}
+  .loc{margin-top:6px}
+  .deck{height:clamp(220px,calc(100dvh - 350px),460px)}
+  .actions{margin:32px 0 4px}
+  .act{width:52px;height:52px}
+  .act.like{width:64px;height:64px}
+  .act.save,.act.undo{width:42px;height:42px}
+  .card-info{padding:10px 14px 12px}
+  .card-info h2{font-size:21px}
+  .sci{margin-bottom:6px}
+}
+.card-visual{min-height:110px}
+@media (max-height:620px){
+  .hero h1{font-size:21px}
+  .sci,.wants-l{display:none}
+  .card-info > .chips:last-child{display:none}
+  .card-info > .chips{flex-wrap:nowrap;overflow:hidden}
+}
+
+/* ---------- מתנה / החלפה ---------- */
+.mode{position:absolute;bottom:12px;inset-inline-end:12px;padding:6px 11px;border-radius:999px;font-size:13px;font-weight:700;background:#fff;color:var(--jungle);box-shadow:0 3px 0 rgba(7,59,42,.18);white-space:nowrap}
+.mini .mode{bottom:8px;inset-inline-end:8px;font-size:11px;padding:4px 8px}
+.m-swap{background:var(--lagoon);color:#fff}
+.m-gift{background:var(--hibiscus);color:#fff}
+.m-both{background:var(--mango);color:var(--jungle)}
+.mode-big{display:flex;flex-direction:column;gap:2px;padding:12px 16px;border-radius:var(--r-md);margin-top:12px;font-family:var(--font-d);font-weight:800;font-size:18px}
+.mode-big span{font-family:var(--font-b);font-weight:500;font-size:13px;opacity:.9}
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.mode-opt{display:flex;flex-direction:column;align-items:center;gap:2px;padding:12px 6px;border-radius:var(--r-md);background:var(--card);border:3px solid transparent;text-align:center;color:var(--jungle)}
+.mode-opt i{font-style:normal;font-size:26px}
+.mode-opt b{font-family:var(--font-d);font-size:15px}
+.mode-opt span{font-size:11px;color:var(--muted);line-height:1.3}
+.mode-opt.on{border-color:var(--jungle)}
+.mode-opt.on.m-swap{background:#D5F6F5}.mode-opt.on.m-gift{background:#FFE0EC}.mode-opt.on.m-both{background:#FFF1CC}
+.mode-opt.m-swap,.mode-opt.m-gift,.mode-opt.m-both{color:var(--jungle)}
+.mode-opt:not(.on){background:var(--card)}
+.gift-art{background:#FFE0EC;font-size:40px}
+.thumb .gift-art,.duo .gift-art{font-size:22px}
+.req-msg{font-size:14px;font-style:italic;color:var(--muted);margin:4px 0}
+
+/* ---------- מיקום חי ---------- */
+.live-ask{display:flex;align-items:center;gap:6px;background:#fff;border-radius:16px;padding:4px 4px 4px 10px;margin:0 0 10px;box-shadow:0 6px 18px -10px rgba(7,59,42,.5);position:relative;z-index:3}
+.live-ask button:first-child{flex:1;display:flex;align-items:center;gap:8px;padding:9px 10px;font-weight:700;font-size:14px;color:var(--jungle);text-align:start}
+.live-ask button:last-child{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:var(--muted)}
+
+/* ---------- משתלות ---------- */
+.b-nursery{background:var(--orchid);color:#fff}
+.promo-card{box-shadow:0 0 0 3px var(--orchid),0 14px 30px -18px rgba(7,59,42,.6)}
+.deal{display:inline-block;margin:6px 0 8px;padding:6px 12px;border-radius:12px;background:var(--lime);color:var(--jungle);font-family:var(--font-d);font-weight:900;font-size:18px}
+.deal.sm{font-size:13px;padding:3px 8px;margin:4px 0 0}
+.promo-text{font-size:14px;color:var(--muted);margin:6px 0 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.nursery-art{background:linear-gradient(135deg,#F3E4FF,#DDF7C2);font-size:44px}
+.nursery-art.big{font-size:90px}
+.nursery-mini .mv{height:100px}
+.promo-sheet-v{position:relative;height:200px;border-radius:var(--r-md);overflow:hidden;margin-bottom:12px}
+.contact{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}
+.contact .btn{width:auto;flex:1;min-width:96px;text-decoration:none;margin:0}
+.btn.wa{background:#25D366;color:#073B2A}
+.promo-row{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:var(--r-md);padding:10px;width:100%;text-align:start}
+.promo-row .li-main{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.promo-row.off{opacity:.5}
+.promo-row .thumb{width:56px;height:56px}
+.mini-toggle input{appearance:none;width:44px;height:26px;border-radius:13px;background:var(--line);position:relative;cursor:pointer;flex:none}
+.mini-toggle input::after{content:"";position:absolute;top:3px;inset-inline-start:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:inset-inline-start .2s}
+.mini-toggle input:checked{background:var(--leaf)}
+.mini-toggle input:checked::after{inset-inline-start:21px}
+.nursery-pin{font-size:26px;line-height:34px;text-align:center;background:#fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.ph .icon-btn{flex:none}

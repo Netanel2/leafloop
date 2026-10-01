@@ -2,7 +2,7 @@
 import {
   initializeApp, getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup,
-  getFirestore, doc, getDoc, setDoc, updateDoc, addDoc, collection, query, where,
+  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where,
   getDocs, onSnapshot, orderBy, limit, increment, arrayUnion, arrayRemove, writeBatch
 } from './fb.js';
 import { FIREBASE_CONFIG } from './firebase-config.js';
@@ -60,13 +60,27 @@ const RADII = [2, 5, 10, 25, 50, 100, 500];
 const AV_COLORS = ['#FF2E7E', '#FFB21C', '#0FB5B2', '#FF6A3D', '#B44CFF', '#19A55B'];
 const QUICK = ['מתאים לך להחליף?', 'איפה נוח לך להיפגש?', 'אני יכול/ה היום', 'מתאים מחר?', 'אפשר תמונה נוספת של הצמח?'];
 const REPORT_REASONS = ['הטרדה או התנהגות פוגענית', 'ספאם או הונאה', 'תוכן לא הולם', 'לא הגיע/ה למפגש', 'אחר'];
+const MODE = { swap: { t: 'להחלפה', i: '🔄', c: 'm-swap' }, gift: { t: 'במתנה', i: '🎁', c: 'm-gift' }, both: { t: 'מתנה או החלפה', i: '💚', c: 'm-both' } };
+const MODE_HINT = { swap: 'בתמורה לצמח אחר', gift: 'בלי תמורה, למי שירצה', both: 'מה שמתאים לצד השני' };
+const modeOf = p => (p && MODE[p.mode] ? p.mode : 'swap');
+// מי רואה את פאנל הניהול של המשתלות (חייב להתאים לכתובת ב-firestore.rules)
+const ADMIN_EMAILS = ['netanelkk9@gmail.com'];
 const TYPE_LABEL = { perfect: 'התאמה מושלמת', wishlist: 'מהרשימה שלך', good: 'התאמה אפשרית', nearby: 'קרוב אליך' };
+
+// ---------- מכשיר ----------
+const UA = navigator.userAgent || '';
+const isIOS = /iPad|iPhone|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isMobile = isIOS || /Android/i.test(UA);
+const inAppBrowser = /FBAN|FBAV|FB_IAB|Instagram|Line\/|Snapchat|TikTok|musical_ly|; wv\)|GSA\//i.test(UA);
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 // ---------- Firebase ----------
 const cfgOk = !!(FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !/PASTE/.test(FIREBASE_CONFIG.apiKey));
+// ההתחברות עוברת דרך הכתובת של האתר עצמו (worker.js), כדי שתעבוד גם באייפון.
+const sameDomainAuth = location.protocol === 'https:' && !/(firebaseapp\.com|web\.app)$/.test(location.hostname);
 let auth = null, db = null;
 if (cfgOk) {
-  const app = initializeApp(FIREBASE_CONFIG);
+  const app = initializeApp(sameDomainAuth ? { ...FIREBASE_CONFIG, authDomain: location.host } : FIREBASE_CONFIG);
   auth = getAuth(app);
   db = getFirestore(app);
 }
@@ -76,9 +90,10 @@ const S = {
   me: null, profile: null, booted: false,
   priv: { swipes: {}, saved: [], blocked: [], alertsSeenAt: 0 },
   myPlants: [], pool: [], poolAt: 0, users: {}, photos: {},
-  matches: [], incoming: [], outgoing: [], msgs: [], reviews: []
+  matches: [], incoming: [], outgoing: [], msgs: [], reviews: [],
+  here: null, nurseries: [], promos: [], myNursery: null
 };
-let filters = (() => { try { return { cat: 'all', offer: 'all', delivery: 'all', ...JSON.parse(localStorage.getItem('ll_filters') || '{}') }; } catch (e) { return { cat: 'all', offer: 'all', delivery: 'all' }; } })();
+let filters = (() => { const d = { cat: 'all', offer: 'all', delivery: 'all', mode: 'all' }; try { return { ...d, ...JSON.parse(localStorage.getItem('ll_filters') || '{}') }; } catch (e) { return d; } })();
 const saveFilters = () => { try { localStorage.setItem('ll_filters', JSON.stringify(filters)); } catch (e) { } };
 const uid = () => S.me && S.me.uid;
 let privT;
@@ -98,7 +113,9 @@ function km(a, b) {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(t(a.lat)) * Math.cos(t(b.lat)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
 }
-const dist = o => km(S.profile, o);
+const base = () => S.here || S.profile;
+const dist = o => km(base(), o);
+const isAdmin = () => !!(S.me && ADMIN_EMAILS.includes((S.me.email || '').toLowerCase()));
 const fmtKm = d => (d >= 9999 ? '' : (d < 1 ? 'פחות מק״מ' : (d < 10 ? d.toFixed(1) : Math.round(d)) + ' ק״מ'));
 const radiusLabel = r => (r >= 500 ? 'כל הארץ' : r + ' ק״מ');
 const initials = n => (String(n || '?').trim()[0] || '?');
@@ -123,7 +140,7 @@ const otherId = m => m.users.find(x => x !== uid());
 const otherInfo = m => (m.info && m.info[otherId(m)]) || { name: 'משתמש/ת', color: '#19A55B' };
 
 function visual(p) {
-  if (!p) return '';
+  if (!p || (!p.catId && !p.thumb && !p.img)) return `<div class="art gift-art" aria-label="מתנה">🎁</div>`;
   const key = p.id || p.catId;
   const src = S.photos[key] || p.thumb;
   if (src) return `<div class="photo"><img data-pid="${esc(key)}" src="${src}" alt="${esc(pName(p))}"></div>`;
@@ -206,7 +223,8 @@ function feed() {
     dist(p) <= S.profile.radius &&
     (f.cat === 'all' || catById(p.catId).cat === f.cat) &&
     (f.offer === 'all' || p.offer === f.offer) &&
-    (f.delivery === 'all' || p.delivery === f.delivery || p.delivery === 'both')
+    (f.delivery === 'all' || p.delivery === f.delivery || p.delivery === 'both') &&
+    (f.mode === 'all' || modeOf(p) === f.mode || modeOf(p) === 'both')
   ).sort((a, b) => score(b) - score(a));
 }
 
@@ -217,7 +235,7 @@ function toast(msg) {
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3400);
 }
 function sheet(html) {
-  $('#sheet').innerHTML = html;
+  $('#sheet').innerHTML = `<button class="sheet-x" data-a="closeSheet" aria-label="סגירה">${ic('x', 20)}</button>` + html;
   $('#sheet-wrap').classList.add('open');
   setTimeout(() => $('#sheet').focus({ preventScroll: true }), 250);
 }
@@ -234,7 +252,10 @@ function notifList() {
   const out = [];
   S.incoming.forEach(r => {
     const first = Object.values(r.offerSnap || {})[0];
-    out.push({ t: r.t, text: `🌿 ${r.fromInfo.name} רוצה להציע לך ${catById(first && first.catId).he} בתמורה ל${catById(r.targetSnap.catId).he} שלך.`, link: 'matches', unread: true });
+    out.push({ t: r.t, text: first ? `🌿 ${r.fromInfo.name} רוצה להציע לך ${catById(first.catId).he} בתמורה ל${catById(r.targetSnap.catId).he} שלך.` : `🎁 ${r.fromInfo.name} ישמח/תשמח לקבל את ה${catById(r.targetSnap.catId).he} שלך.`, link: 'matches', unread: true });
+  });
+  activePromos().filter(pr => iWant(pr)).forEach(pr => {
+    out.push({ t: pr.t, text: `🌿 ${pr.nurseryName} מציעה ${pr.title}, ${fmtKm(dist(pr))} ממך.`, link: 'nursery/' + pr.nurseryId, unread: (pr.t || 0) > (S.priv.alertsSeenAt || 0) });
   });
   S.matches.forEach(m => {
     const n = (m.unread || {})[uid()] || 0;
@@ -246,6 +267,78 @@ function notifList() {
   return out.sort((a, b) => (b.t || 0) - (a.t || 0)).slice(0, 40);
 }
 const unreadMsgs = () => S.matches.reduce((s, m) => s + (isBlocked(otherId(m)) ? 0 : ((m.unread || {})[uid()] || 0)), 0);
+
+// ---------- מיקום חי ----------
+const nearestCity = h => CITIES.slice().sort((a, b) => km(h, a) - km(h, b))[0];
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
+const liveOn = () => lsGet('ll_live') !== '0';
+const locLabel = () => (S.here ? `${S.here.city} (כאן עכשיו)` : S.profile.city);
+let locating = false, lastLoc = 0;
+function locate(fromUser) {
+  if (!navigator.geolocation || locating) return;
+  if (!fromUser && (!liveOn() || Date.now() - lastLoc < 5 * 60e3)) return;
+  locating = true;
+  navigator.geolocation.getCurrentPosition(pos => {
+    locating = false; lastLoc = Date.now();
+    const h = { lat: +pos.coords.latitude.toFixed(3), lng: +pos.coords.longitude.toFixed(3) };
+    const c = nearestCity(h), prev = S.here;
+    S.here = { ...h, city: km(h, c) > 12 ? 'ליד ' + c.n : c.n };
+    lsSet('ll_live', '1'); lsSet('ll_granted', '1');
+    if (fromUser || !prev || km(prev, h) > 1) live(['discover', 'map', 'nursery']);
+    if (S.profile && km(h, S.profile) > 15 && (!prev || km(prev, h) > 15)) toast(`📍 נראה שאתם ב${S.here.city}. מציגים צמחים לידכם.`);
+  }, err => {
+    locating = false;
+    if (fromUser) toast(err.code === 1 ? 'אין הרשאה למיקום. אפשר לאשר בהגדרות הדפדפן.' : 'לא הצלחנו לאתר מיקום. נסו שוב.');
+  }, { enableHighAccuracy: false, timeout: 12000, maximumAge: fromUser ? 0 : 300000 });
+}
+async function autoLocate() {
+  if (!liveOn()) return;
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const p = await navigator.permissions.query({ name: 'geolocation' });
+      if (p.state === 'granted') return locate(false);
+      if (p.state === 'denied') return;
+    }
+  } catch (e) { }
+  if (lsGet('ll_granted') === '1') locate(false);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.booted) autoLocate(); });
+
+// ---------- משתלות ----------
+const nurseryById = id => S.nurseries.find(n => n.id === id) || (S.myNursery && S.myNursery.id === id ? S.myNursery : null);
+function activePromos() {
+  const now = Date.now(), act = new Set(S.nurseries.filter(n => n.active).map(n => n.id));
+  return S.promos.filter(p => p.active && act.has(p.nurseryId) && (!p.until || p.until >= now) && dist(p) <= (p.radius || 25));
+}
+const promoVisual = pr => pr.img ? `<div class="photo"><img src="${pr.img}" alt="${esc(pr.title)}"></div>` : visual({ id: pr.id, catId: pr.catId || 'monstera' });
+const viewed = new Set();
+function countView(pr) { if (viewed.has(pr.id)) return; viewed.add(pr.id); updateDoc(doc(db, 'promos', pr.id), { views: increment(1) }).catch(errLog); }
+function countClick(pr) { updateDoc(doc(db, 'promos', pr.id), { clicks: increment(1) }).catch(errLog); }
+const waNum = ph => { let d = String(ph || '').replace(/\D/g, ''); if (d.startsWith('0')) d = '972' + d.slice(1); return d; };
+function contactBtns(n) {
+  if (!n) return '';
+  const b = [];
+  if (n.phone) b.push(`<a class="btn primary sm" href="tel:${esc(n.phone)}">📞 התקשרו</a>`);
+  if (n.whatsapp || n.phone) b.push(`<a class="btn sm wa" href="https://wa.me/${waNum(n.whatsapp || n.phone)}" target="_blank" rel="noopener">💬 וואטסאפ</a>`);
+  if (n.lat) b.push(`<a class="btn sun sm" href="https://waze.com/ul?ll=${n.lat},${n.lng}&navigate=yes" target="_blank" rel="noopener">🚗 ניווט</a>`);
+  return `<div class="contact">${b.join('')}</div>`;
+}
+function openPromo(pr) {
+  countClick(pr);
+  const n = nurseryById(pr.nurseryId) || { name: pr.nurseryName };
+  sheet(`<div class="promo-sheet-v">${promoVisual(pr)}</div>
+  <span class="badge b-nursery" style="position:static;display:inline-block;margin-bottom:8px">🌿 מהמשתלה השכונתית</span>
+  <h3>${esc(pr.title)}</h3>${pr.deal ? `<div class="deal">${esc(pr.deal)}</div>` : ''}
+  ${pr.text ? `<p>${esc(pr.text)}</p>` : ''}
+  <p class="muted small">${esc(n.name)}${n.address ? ', ' + esc(n.address) : ''}, ${fmtKm(dist(pr))} ממך${pr.until ? `. בתוקף עד ${new Date(pr.until).toLocaleDateString('he-IL')}` : ''}</p>
+  ${contactBtns(n)}
+  <button class="btn ghost" data-a="open" data-to="nursery/${pr.nurseryId}">לעמוד המשתלה</button>`);
+}
+function nurseryCard(n) {
+  const cnt = activePromos().filter(p => p.nurseryId === n.id).length;
+  return `<button class="mini nursery-mini" data-a="open" data-to="nursery/${n.id}"><div class="mv">${n.img ? `<div class="photo"><img src="${n.img}" alt=""></div>` : `<div class="art nursery-art">🌿</div>`}</div><div class="mt">${esc(n.name)}<div class="ms">${fmtKm(dist(n))}${cnt ? `, ${cnt} הצעות` : ''}</div></div></button>`;
+}
 
 // =====================================================
 // ניווט
@@ -260,7 +353,7 @@ function route() {
   if (mapObj) { mapObj.remove(); mapObj = null; }
   let full = true;
   if (!cfgOk) renderSetup();
-  else if (S.me === null && !S.authKnown) renderLoading();
+  else if (S.me === null && !S.authKnown) renderLoading(redirecting() ? 'מסיימים להתחבר…' : '');
   else if (!S.me) renderLanding();
   else if (!S.profile) renderOnboarding();
   else if (!S.booted) renderLoading();
@@ -307,8 +400,9 @@ function renderSetup() {
   <h2>צריך לחבר את Firebase</h2>
   <p class="muted">האפליקציה עובדת, אבל עוד לא מחוברת למסד הנתונים. פתחו את הקובץ <b>firebase-config.js</b> והדביקו בו את הפרטים מ-Firebase. ההוראות המלאות נמצאות בקובץ README.</p></div>`;
 }
-function renderLoading() {
-  $('#view').innerHTML = `<div class="loading"><div class="wordmark">Leaf<span>Loop</span></div><span class="spin big"></span></div>`;
+function redirecting() { try { return sessionStorage.getItem('ll_redirect') === '1'; } catch (e) { return false; } }
+function renderLoading(msg) {
+  $('#view').innerHTML = `<div class="loading"><div class="wordmark">Leaf<span>Loop</span></div><span class="spin big"></span>${msg ? `<p class="muted">${msg}</p>` : ''}</div>`;
 }
 function renderLanding() {
   $('#view').innerHTML = `<div class="landing">
@@ -377,9 +471,16 @@ async function finishOnboarding(el) {
 // התחברות וסשן
 // =====================================================
 async function signIn(el) {
+  if (inAppBrowser) { openInBrowserSheet(); return; }
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
   busy(el, true, 'מתחברים…');
+  // בטלפון: מעבר באותו דף (בלי לשונית חדשה). במחשב: חלון קופץ.
+  if (isMobile && sameDomainAuth) {
+    try { sessionStorage.setItem('ll_redirect', '1'); } catch (e) { }
+    try { await signInWithRedirect(auth, provider); } catch (e) { busy(el, false); errLog(e); toast('ההתחברות לא הצליחה. נסו שוב.'); }
+    return;
+  }
   try { await signInWithPopup(auth, provider); }
   catch (e) {
     busy(el, false);
@@ -389,6 +490,11 @@ async function signIn(el) {
     errLog(e); toast('ההתחברות לא הצליחה. נסו שוב.');
   }
 }
+function openInBrowserSheet() {
+  sheet(`<h3>פתחו בדפדפן</h3><p class="muted">Google לא מאפשר להתחבר מתוך הדפדפן של אפליקציות כמו אינסטגרם או פייסבוק.</p>
+  <p>${isIOS ? 'לחצו על <b>⋯</b> או על סמל השיתוף, ובחרו <b>פתיחה בספארי</b>.' : 'לחצו על <b>⋮</b> ובחרו <b>פתיחה בדפדפן</b>.'}</p>
+  <button class="btn hot" data-a="copyLink">העתקת הקישור</button><button class="btn ghost" data-a="closeSheet">סגירה</button>`);
+}
 let subs = [];
 function unsubAll() { subs.forEach(f => { try { f(); } catch (e) { } }); subs = []; if (chatUnsub) { chatUnsub(); chatUnsub = null; } }
 async function startSession() {
@@ -397,6 +503,8 @@ async function startSession() {
     if (ps.exists()) S.priv = { swipes: {}, saved: [], blocked: [], alertsSeenAt: 0, ...ps.data() };
   } catch (e) { errLog(e); }
   listen();
+  autoLocate();
+  await loadMyNursery();
   try { await loadPool(true); } catch (e) { errLog(e); toast('לא הצלחנו לטעון צמחים. בדקו את החיבור לאינטרנט.'); }
   S.booted = true;
   updateDoc(doc(db, 'users', uid()), { lastSeen: Date.now() }).catch(errLog);
@@ -408,7 +516,22 @@ async function loadPool(force) {
   const ids = [...new Set(S.pool.map(p => p.ownerId))];
   ids.forEach(id => { delete S.users[id]; });
   await Promise.all(ids.map(getUser));
+  try {
+    const [ns, ps] = await Promise.all([
+      getDocs(query(collection(db, 'nurseries'), where('active', '==', true), limit(100))),
+      getDocs(query(collection(db, 'promos'), where('active', '==', true), limit(150)))
+    ]);
+    S.nurseries = ns.docs.map(d => ({ id: d.id, ...d.data() }));
+    S.promos = ps.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (e) { errLog(e); }
   S.poolAt = Date.now();
+}
+async function loadMyNursery() {
+  if (!S.me || !S.me.email) return;
+  try {
+    const s = await getDocs(query(collection(db, 'nurseries'), where('ownerEmail', '==', S.me.email.toLowerCase())));
+    S.myNursery = s.docs.length ? { id: s.docs[0].id, ...s.docs[0].data() } : null;
+  } catch (e) { errLog(e); }
 }
 function listen() {
   const me = uid();
@@ -476,18 +599,22 @@ function syncStats() {
 // =====================================================
 let lastSwipe = null;
 VIEWS.discover = function () {
-  const nearWish = S.pool.filter(p => iWant(p) && dist(p) <= S.profile.radius && !isBlocked(p.ownerId)).sort((a, b) => dist(a) - dist(b));
-  const people = [...new Set(S.pool.filter(p => dist(p) <= S.profile.radius && !isBlocked(p.ownerId)).map(p => p.ownerId))].map(id => S.users[id]).filter(Boolean).sort((a, b) => dist(a) - dist(b)).slice(0, 20);
+  const R = S.profile.radius;
+  const nearWish = S.pool.filter(p => iWant(p) && dist(p) <= R && !isBlocked(p.ownerId)).sort((a, b) => dist(a) - dist(b));
+  const people = [...new Set(S.pool.filter(p => dist(p) <= R && !isBlocked(p.ownerId)).map(p => p.ownerId))].map(id => S.users[id]).filter(Boolean).sort((a, b) => dist(a) - dist(b)).slice(0, 20);
+  const nurs = S.nurseries.filter(n => n.active && dist(n) <= Math.max(R, 30)).sort((a, b) => dist(a) - dist(b)).slice(0, 12);
   const n = notifList().filter(x => x.unread).length;
+  const askLive = !S.here && liveOn() && lsGet('ll_live_ask') !== '0' && !!navigator.geolocation;
   $('#view').innerHTML = `
   <header class="hero">
     <div class="row sb"><h1>${greeting()},<br>${esc(S.profile.name)}</h1>
     <button class="icon-btn" data-a="notifs" aria-label="התראות">${ic('bell', 24)}<span class="dot" id="bell-dot" style="${n ? '' : 'display:none'}">${n}</span></button></div>
-    <button class="loc" data-a="filters">${ic('pin', 18)} ${esc(S.profile.city)}, ${radiusLabel(S.profile.radius)}</button>
+    <button class="loc" data-a="filters">${ic('pin', 18)} ${esc(locLabel())}, ${radiusLabel(R)}</button>
   </header>
   <div class="deck-wrap">
     <div class="deck-meta"><span id="deck-count"></span>
       <span class="row" style="gap:14px"><button data-a="refresh" class="row" style="color:#fff;gap:4px" aria-label="רענון">${ic('refresh', 18)}</button><button data-a="filters" class="row" style="color:#fff;gap:4px">${ic('filter', 18)} סינון</button></span></div>
+    ${askLive ? `<div class="live-ask"><button data-a="useLive">${ic('pin', 18)} להציג צמחים לפי המקום שבו אתם עכשיו?</button><button data-a="noLive" aria-label="לא תודה">${ic('x', 16)}</button></div>` : ''}
     <section class="deck" id="deck" aria-label="כרטיסי צמחים"></section>
     <div class="actions" id="deck-actions">
       <button class="act undo" data-a="undo" aria-label="ביטול ההחלקה האחרונה" ${lastSwipe ? '' : 'disabled'}>${ic('undo', 20)}</button>
@@ -498,13 +625,15 @@ VIEWS.discover = function () {
     </div>
   </div>
   ${nearWish.length ? `<h2 class="section-t">מרשימת המשאלות שלך</h2><div class="strip">${nearWish.map(miniCard).join('')}</div>` : ''}
+  ${nurs.length ? `<h2 class="section-t">משתלות לידך</h2><div class="strip">${nurs.map(nurseryCard).join('')}</div>` : ''}
   ${people.length ? `<h2 class="section-t">אנשים לידך</h2><div class="strip">${people.map(u => `<div class="person">${avatar(u)}${esc(u.name)}<div class="small muted">${fmtKm(dist(u))}</div></div>`).join('')}</div>` : ''}
   <div style="height:20px"></div>`;
   renderDeck();
   hydrate(nearWish.slice(0, 8));
 };
+const modeTag = p => { const m = MODE[modeOf(p)]; return `<span class="mode ${m.c}">${m.i} ${m.t}</span>`; };
 function miniCard(p) {
-  return `<button class="mini" data-a="open" data-to="plant/${p.id}"><div class="mv">${visual(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${esc(p.ownerName)}, ${fmtKm(dist(p))}</div></div></button>`;
+  return `<button class="mini" data-a="open" data-to="plant/${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${esc(p.ownerName)}, ${fmtKm(dist(p))}</div></div></button>`;
 }
 function wantsChips(u, open) {
   const mineCats = myAvail().map(p => p.catId);
@@ -512,22 +641,48 @@ function wantsChips(u, open) {
   return w.map(c => `<span class="chip ${mineCats.includes(c) ? 'have' : 'want'}">${mineCats.includes(c) ? ic('check', 14) : ''}${esc(catById(c).he)}</span>`).join('') +
     (open ? '<span class="chip open">פתוח/ה להצעות</span>' : '') + (!w.length && !open ? '<span class="chip">אפשר להציע</span>' : '');
 }
-function cardHTML(p, i) {
-  const t = matchType(p), u = owner(p);
+function cardHTML(it, i) {
+  if (it.k === 'promo') return promoCardHTML(it.p, i);
+  const p = it.p, t = matchType(p), u = owner(p), gift = modeOf(p) === 'gift';
   return `<article class="card" data-id="${p.id}" style="z-index:${10 - i};--i:${i}">
-    <div class="card-visual">${visual(p)}<span class="badge b-${t}">${TYPE_LABEL[t]}</span>
-      <span class="stamp s-like">מעוניין</span><span class="stamp s-pass">לא בשבילי</span><span class="stamp s-super">סופר!</span></div>
+    <div class="card-visual">${visual(p)}<span class="badge b-${t}">${TYPE_LABEL[t]}</span>${modeTag(p)}
+      <span class="stamp s-like">${gift ? 'אשמח!' : 'מעוניין'}</span><span class="stamp s-pass">לא בשבילי</span><span class="stamp s-super">סופר!</span></div>
     <div class="card-info">
       <div class="row sb"><h2>${esc(pName(p))}</h2><button class="icon-btn" data-a="open" data-to="plant/${p.id}" aria-label="פרטים נוספים">${ic('eye')}</button></div>
       <p class="sci">${esc(catById(p.catId).sci)}</p>
       <div class="chips"><span class="chip">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}</span><span class="chip">${ic('pin', 14)}${fmtKm(dist(p))}</span><span class="chip">${esc(u.name)} ${rating(u)}</span></div>
-      <p class="wants-l">רוצה בתמורה</p><div class="chips">${wantsChips(u, p.open)}</div>
+      ${gift ? `<p class="wants-l">${esc(u.name)} מוסר/ת את זה בלי תמורה 💛</p><div class="chips"><span class="chip open">רק לבקש</span></div>`
+        : `<p class="wants-l">${modeOf(p) === 'both' ? 'אפשר במתנה, או בתמורה ל:' : 'רוצה בתמורה'}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
     </div></article>`;
+}
+function promoCardHTML(pr, i) {
+  const n = nurseryById(pr.nurseryId) || { name: pr.nurseryName };
+  return `<article class="card promo-card" data-id="pr_${pr.id}" data-kind="promo" style="z-index:${10 - i};--i:${i}">
+    <div class="card-visual">${promoVisual(pr)}<span class="badge b-nursery">🌿 מהמשתלה השכונתית</span>${iWant(pr) ? '<span class="mode m-gift">מהרשימה שלך</span>' : ''}
+      <span class="stamp s-like">מעניין!</span><span class="stamp s-pass">לא עכשיו</span><span class="stamp s-super">סופר!</span></div>
+    <div class="card-info">
+      <div class="row sb"><h2>${esc(pr.title)}</h2><button class="icon-btn" data-a="open" data-to="nursery/${pr.nurseryId}" aria-label="לעמוד המשתלה">${ic('eye')}</button></div>
+      ${pr.deal ? `<div class="deal">${esc(pr.deal)}</div>` : ''}
+      <div class="chips"><span class="chip">${ic('pin', 14)}${esc(n.name)}, ${fmtKm(dist(pr))}</span></div>
+      ${pr.text ? `<p class="promo-text">${esc(pr.text)}</p>` : ''}
+    </div></article>`;
+}
+function deckItems() {
+  const plants = feed().map(p => ({ k: 'plant', p }));
+  const seen = S.priv.promoSeen || {}, now = Date.now();
+  const promos = activePromos().filter(pr => !seen[pr.id] || now - seen[pr.id] > 3 * 864e5)
+    .sort((a, b) => ((iWant(b) ? 1 : 0) - (iWant(a) ? 1 : 0)) || dist(a) - dist(b)).map(p => ({ k: 'promo', p }));
+  if (!promos.length) return plants;
+  const out = []; let j = 0;
+  plants.forEach((it, i) => { out.push(it); if ((i + 1) % 4 === 0 && j < promos.length) out.push(promos[j++]); });
+  if (plants.length < 4 && j < promos.length) out.splice(Math.min(1, out.length), 0, promos[j++]);
+  return out;
 }
 function renderDeck() {
   const deck = $('#deck'); if (!deck) return;
-  const list = feed();
-  $('#deck-count').textContent = list.length ? `${list.length} צמחים באזור` : '';
+  const list = deckItems();
+  const plantsN = list.filter(x => x.k === 'plant').length;
+  $('#deck-count').textContent = plantsN ? `${plantsN} צמחים באזור` : '';
   $('#deck-actions').classList.toggle('hidden', !list.length);
   const undo = $('[data-a=undo]'); if (undo) undo.disabled = !lastSwipe;
   if (!list.length) {
@@ -543,7 +698,8 @@ function renderDeck() {
   const top = list.slice(0, 3);
   deck.innerHTML = top.map(cardHTML).reverse().join('');
   bindDrag();
-  hydrate(top);
+  hydrate(top.filter(x => x.k === 'plant').map(x => x.p));
+  if (top[0].k === 'promo') countView(top[0].p);
 }
 function bindDrag() {
   const card = $$('#deck .card[data-id]').pop(); if (!card) return;
@@ -574,8 +730,18 @@ function bindDrag() {
 }
 function decide(a) {
   const card = $$('#deck .card[data-id]').pop(); if (!card) return;
-  const p = S.pool.find(x => x.id === card.dataset.id); if (!p) return;
   const out = { like: 'translate(130%,-4%) rotate(22deg)', pass: 'translate(-130%,-4%) rotate(-22deg)', super: 'translate(0,-130%)', save: 'translate(0,40%) scale(.6)' }[a];
+  if (card.dataset.kind === 'promo') {
+    const pr = S.promos.find(x => 'pr_' + x.id === card.dataset.id); if (!pr) return;
+    card.classList.add('leaving'); card.style.transform = out;
+    S.priv.promoSeen = { ...(S.priv.promoSeen || {}), [pr.id]: Date.now() };
+    if (a === 'save') { S.priv.savedPromos = [...new Set([...(S.priv.savedPromos || []), pr.id])]; toast('נשמר. תמצאו את זה בפרופיל, תחת "שמורים".'); }
+    lastSwipe = (a === 'pass' || a === 'save') ? { promo: pr.id, a } : null;
+    savePriv();
+    setTimeout(() => { renderDeck(); if (a === 'like' || a === 'super') openPromo(pr); }, 260);
+    return;
+  }
+  const p = S.pool.find(x => x.id === card.dataset.id); if (!p) return;
   card.classList.add('leaving'); card.style.transform = out;
   if (navigator.vibrate) navigator.vibrate(12);
   S.priv.swipes[p.id] = a;
@@ -588,6 +754,7 @@ async function afterLike(p, sup) {
   const me = uid();
   const u = await getUser(p.ownerId);
   setDoc(doc(db, 'likes', me + '_' + p.id), { from: me, to: p.ownerId, plantId: p.id, super: !!sup, t: Date.now() }).catch(errLog);
+  if (modeOf(p) === 'gift') return openRequestSheet(p, u, sup);
   let mine = theyWantMine(u).map(x => x.id);
   let mutual = false;
   try {
@@ -605,36 +772,47 @@ async function afterLike(p, sup) {
 
 // ---------- הצעת החלפה ----------
 function openRequestSheet(p, u, sup) {
-  if (S.outgoing.some(r => r.target === p.id && r.status === 'pending')) { toast(`כבר שלחתם הצעה על הצמח הזה. מחכים לתשובה מ${u.name}.`); return; }
-  if (!myAvail().length) {
-    sheet(`<h3>עוד אין לך צמחים להציע</h3><p class="muted">כדי לשלוח הצעת החלפה ל${esc(u.name)}, הוסיפו קודם צמח אחד לפחות.</p><button class="btn hot" data-a="open" data-to="add">הוספת צמח</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
+  if (S.outgoing.some(r => r.target === p.id && r.status === 'pending')) { toast(`כבר שלחתם בקשה על הצמח הזה. מחכים לתשובה מ${u.name}.`); return; }
+  const mode = modeOf(p);
+  const msgBox = `<p class="label">כמה מילים ל${esc(u.name)} (לא חובה)</p><textarea class="field" id="req-msg" rows="2" maxlength="300" placeholder="היי! אשמח מאוד, יש לי מקום מושלם בשבילו 🌿"></textarea>`;
+  if (mode === 'gift') {
+    sheet(`<h3>🎁 רוצים לקבל במתנה?</h3>
+    <p class="muted">${esc(u.name)} מוסר/ת את ה${esc(pName(p))} בלי תמורה. שלחו בקשה, ואם ${esc(u.name)} יאשר/תאשר, תתאמו איסוף בצ'אט.</p>
+    ${msgBox}<div class="err" id="req-err"></div>
+    <button class="btn hot" data-a="sendRequest" data-id="${p.id}">🎁 שליחת בקשה לקבל</button>
+    <button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
+    return;
+  }
+  if (mode === 'swap' && !myAvail().length) {
+    sheet(`<h3>עוד אין לך צמחים להציע</h3><p class="muted">${esc(u.name)} מחפש/ת החלפה. כדי לשלוח הצעה, הוסיפו קודם צמח אחד לפחות.</p><button class="btn hot" data-a="open" data-to="add">הוספת צמח</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
     return;
   }
   const wanted = theyWantMine(u).map(x => x.id);
   const wl = (u.wishlist || []).map(w => esc(catById(w).he)).join(', ');
   sheet(`<h3>${sup ? 'סופר מעוניין! ⭐' : 'שמרנו שאתם מעוניינים'}</h3>
-  <p class="muted">אין כאן התאמה אוטומטית, אבל אפשר לשלוח ל${esc(u.name)} הצעת החלפה.${wl ? ` ברשימת המשאלות: ${wl}.` : ''}${p.open ? ' פתוח/ה גם להצעות אחרות.' : ''}</p>
-  <p class="label">מה להציע בתמורה ל${esc(pName(p))}?</p>
-  <div class="pick">${myAvail().map(x => `<label class="pick-item"><input type="checkbox" name="offer" value="${x.id}" ${wanted.includes(x.id) ? 'checked' : ''}><span class="thumb">${visual(x)}</span><span>${esc(pName(x))} <span class="small muted">(${OFFER[x.offer]}${x.qty > 1 ? ' ×' + x.qty : ''})</span>${wanted.includes(x.id) ? `<em>${esc(u.name)} מחפש/ת את זה</em>` : ''}</span></label>`).join('')}</div>
-  <div class="err" id="req-err"></div>
-  <button class="btn hot" data-a="sendRequest" data-id="${p.id}">${ic('swap')} שליחת הצעת החלפה</button>
+  <p class="muted">${mode === 'both' ? `${esc(u.name)} מוכן/ה למסור במתנה או להחליף. אפשר לבקש בלי לתת כלום, או להציע משהו בתמורה.` : `אין כאן התאמה אוטומטית, אבל אפשר לשלוח ל${esc(u.name)} הצעת החלפה.`}${wl ? ` ברשימת המשאלות: ${wl}.` : ''}${p.open ? ' פתוח/ה גם להצעות אחרות.' : ''}</p>
+  ${myAvail().length ? `<p class="label">${mode === 'both' ? 'רוצים להציע משהו בתמורה? (לא חובה)' : `מה להציע בתמורה ל${esc(pName(p))}?`}</p>
+  <div class="pick">${myAvail().map(x => `<label class="pick-item"><input type="checkbox" name="offer" value="${x.id}" ${wanted.includes(x.id) ? 'checked' : ''}><span class="thumb">${visual(x)}</span><span>${esc(pName(x))} <span class="small muted">(${OFFER[x.offer]}${x.qty > 1 ? ' ×' + x.qty : ''})</span>${wanted.includes(x.id) ? `<em>${esc(u.name)} מחפש/ת את זה</em>` : ''}</span></label>`).join('')}</div>` : ''}
+  ${msgBox}<div class="err" id="req-err"></div>
+  <button class="btn hot" data-a="sendRequest" data-id="${p.id}">${ic('swap')} ${mode === 'both' ? 'שליחת בקשה' : 'שליחת הצעת החלפה'}</button>
   <button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
 }
 async function sendRequest(el) {
   const p = S.pool.find(x => x.id === el.dataset.id); if (!p) return;
   const u = await getUser(p.ownerId);
   const ids = $$('#sheet input[name=offer]:checked').map(i => i.value);
-  if (!ids.length) { $('#req-err').textContent = 'בחרו לפחות צמח אחד להציע.'; return; }
+  if (modeOf(p) === 'swap' && !ids.length) { $('#req-err').textContent = 'בחרו לפחות צמח אחד להציע.'; return; }
   const snap = {};
   ids.forEach(id => { const x = S.myPlants.find(y => y.id === id); if (x) snap[id] = { catId: x.catId, thumb: x.thumb || null, offer: x.offer, qty: x.qty || 1 }; });
+  const mEl = $('#req-msg'); const msg = mEl ? mEl.value.trim() : '';
   busy(el, true, 'שולחים…');
   try {
     await addDoc(collection(db, 'requests'), {
       from: uid(), to: p.ownerId, fromInfo: pubInfo(S.profile), toInfo: pubInfo(u),
       target: p.id, targetSnap: { catId: p.catId, thumb: p.thumb || null, offer: p.offer, qty: p.qty || 1 },
-      offer: ids, offerSnap: snap, status: 'pending', seen: false, t: Date.now()
+      offer: ids, offerSnap: snap, kind: ids.length ? 'swap' : 'gift', msg, status: 'pending', seen: false, t: Date.now()
     });
-    closeSheet(); toast(`ההצעה נשלחה ל${u.name}. נעדכן אתכם כשתגיע תשובה.`);
+    closeSheet(); toast(ids.length ? `ההצעה נשלחה ל${u.name}. נעדכן אתכם כשתגיע תשובה.` : `הבקשה נשלחה ל${u.name} 🎁 נעדכן אתכם כשתגיע תשובה.`);
   } catch (e) { errLog(e); busy(el, false); $('#req-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
 }
 async function acceptReq(rid, toChat, el) {
@@ -650,6 +828,7 @@ async function acceptReq(rid, toChat, el) {
     const theirPlants = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
     const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', status: toChat ? 'discussing' : 'agreed' });
     await updateDoc(doc(db, 'requests', rid), { status: 'accepted', matchId: m.id });
+    if (r.msg) sendMsg(m.id, `💬 ${r.fromInfo.name} כתב/ה: ${r.msg}`, null, true);
     if (toChat) go('chat/' + m.id); else showMatch(m);
   } catch (e) { errLog(e); busy(el, false); toast('לא הצלחנו לאשר. נסו שוב.'); }
 }
@@ -677,15 +856,19 @@ async function createMatch(o) {
 }
 const snapOf = (m, pid) => ({ id: pid, ...((m.plants || {})[pid] || {}) });
 function showMatch(m) {
-  const me = uid(), o = otherId(m);
-  const mp = snapOf(m, (m.give[me] || [])[0]), tp = snapOf(m, (m.give[o] || [])[0]);
-  $('#overlay').innerHTML = `<div class="match" role="dialog" aria-label="יש התאמה">
+  const me = uid(), o = otherId(m), name = otherInfo(m).name;
+  const mineIds = m.give[me] || [], theirIds = m.give[o] || [];
+  const mp = mineIds.length ? snapOf(m, mineIds[0]) : null, tp = theirIds.length ? snapOf(m, theirIds[0]) : null;
+  const title = !mp ? 'מתנה בדרך אליך!' : !tp ? 'מצאת למי למסור!' : 'יש התאמה!';
+  const sub = mp && tp ? 'הצמחים שלכם מצאו אחד את השני.' : 'עוד צמח מצא בית חדש.';
+  const line = !mp ? `ה${esc(pName(tp))} של ${esc(name)} מגיע/ה אליך במתנה 🎁` : !tp ? `ה${esc(pName(mp))} שלך עובר/ת ל${esc(name)} במתנה 🎁` : `ה${esc(pName(mp))} שלך ⇄ ה${esc(pName(tp))} של ${esc(name)}`;
+  $('#overlay').innerHTML = `<div class="match" role="dialog" aria-label="${title}">
     <div class="burst">${burstLeaves(18)}</div>
     <div class="pair"><div class="bubble from-r">${visual(mp)}</div><div class="heart">${ic('heart', 28)}</div><div class="bubble from-l">${visual(tp)}</div></div>
-    <h1>יש התאמה!</h1>
-    <p>הצמחים שלכם מצאו אחד את השני.</p>
-    <div class="swapline">ה${esc(pName(mp))} שלך ⇄ ה${esc(pName(tp))} של ${esc(otherInfo(m).name)}</div>
-    <div class="btns"><button class="btn sun" data-a="matchChat" data-id="${m.id}">${ic('chat')} בואו נתחיל להחליף</button><button class="btn light" data-a="closeOverlay">אחר כך</button></div>
+    <h1>${title}</h1>
+    <p>${sub}</p>
+    <div class="swapline">${line}</div>
+    <div class="btns"><button class="btn sun" data-a="matchChat" data-id="${m.id}">${ic('chat')} בואו נתאם</button><button class="btn light" data-a="closeOverlay">אחר כך</button></div>
   </div>`;
   $('#overlay').classList.add('open');
   if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
@@ -709,14 +892,15 @@ VIEWS.plant = async function (id) {
   <div class="detail-v">${visual(p)}<button class="icon-btn back" data-a="back" aria-label="חזרה">${ic('back')}</button>${mine ? '' : `<span class="badge b-${t}" style="top:auto;bottom:18px">${TYPE_LABEL[t]}</span>`}</div>
   <div class="pad">
     <h1 style="font-size:32px;font-weight:900">${esc(pName(p))}</h1><p class="sci" style="font-size:15px">${esc(catById(p.catId).sci)}</p>
+    <div class="mode-big ${MODE[modeOf(p)].c}">${MODE[modeOf(p)].i} ${MODE[modeOf(p)].t}<span>${MODE_HINT[modeOf(p)]}</span></div>
     <div class="facts"><div class="fact"><b>${OFFER[p.offer]}</b><span>מה מוצע</span></div><div class="fact"><b>${COND[p.condition] || ''}</b><span>מצב</span></div><div class="fact"><b>${p.qty || 1}</b><span>כמות</span></div></div>
     <div class="owner">${avatar(u)}<div style="flex:1"><b>${esc(u.name)}</b><div class="small muted">${esc(u.city || p.city || '')}${mine ? '' : ', ' + fmtKm(dist(p)) + ' ממך'}</div></div><div style="text-align:center"><b style="font-family:var(--font-d)">${rating(u)}</b><div class="small muted">${u.swaps || 0} החלפות</div></div></div>
-    ${mine ? '' : `<p class="label">${esc(u.name)} רוצה בתמורה</p><div class="chips">${wantsChips(u, p.open)}</div>`}
+    ${mine || modeOf(p) === 'gift' ? '' : `<p class="label">${modeOf(p) === 'both' ? 'אם תרצו להציע משהו בתמורה' : `${esc(u.name)} רוצה בתמורה`}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
     <p class="label">מסירה</p><div class="chips"><span class="chip">${DELIV[p.delivery] || ''}</span><span class="chip">${ic('shield', 14)} מפגש במקום ציבורי</span></div>
     <div style="margin-top:22px">
     ${mine ? `<button class="btn ghost" data-a="myPlantSheet" data-id="${p.id}">ניהול הצמח</button>`
       : m ? `<button class="btn primary" data-a="open" data-to="chat/${m.id}">${ic('chat')} מעבר לצ'אט</button>`
-        : `<button class="btn hot" data-a="likeDetail" data-id="${p.id}">${ic('heart')} מעוניין</button>
+        : `<button class="btn hot" data-a="likeDetail" data-id="${p.id}">${modeOf(p) === 'gift' ? '🎁 אשמח לקבל' : ic('heart') + ' מעוניין'}</button>
            <button class="btn ghost" data-a="toggleSave" data-id="${p.id}">${ic('bookmark')} ${saved ? 'הסרה מהשמורים' : 'שמירה לאחר כך'}</button>`}
     </div>
   </div>`;
@@ -747,16 +931,21 @@ function initMap(near, tries = 0) {
   if (!$('#map') || mapObj) return;
   const r = S.profile.radius;
   const zoom = r <= 5 ? 13 : r <= 10 ? 12 : r <= 25 ? 11 : r <= 50 ? 10 : 8;
-  mapObj = L.map('map').setView([S.profile.lat, S.profile.lng], zoom);
+  const B = base();
+  mapObj = L.map('map').setView([B.lat, B.lng], zoom);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: '© OpenStreetMap' }).addTo(mapObj);
-  L.circle([S.profile.lat, S.profile.lng], { radius: 350, color: '#FF2E7E', fillColor: '#FF2E7E', fillOpacity: .5, weight: 3 }).addTo(mapObj).bindPopup('<b>אתם כאן (בערך)</b>');
-  if (r < 500) L.circle([S.profile.lat, S.profile.lng], { radius: r * 1000, color: '#073B2A', weight: 1, fill: false, dashArray: '6 6' }).addTo(mapObj);
+  L.circle([B.lat, B.lng], { radius: 350, color: '#FF2E7E', fillColor: '#FF2E7E', fillOpacity: .5, weight: 3 }).addTo(mapObj).bindPopup('<b>אתם כאן (בערך)</b>');
+  if (r < 500) L.circle([B.lat, B.lng], { radius: r * 1000, color: '#073B2A', weight: 1, fill: false, dashArray: '6 6' }).addTo(mapObj);
   const by = {};
   near.forEach(p => { (by[p.ownerId] = by[p.ownerId] || []).push(p); });
   Object.values(by).forEach(ps => {
     const u = owner(ps[0]);
     L.circle([jitter(u.id, ps[0].lat, 'a'), jitter(u.id, ps[0].lng, 'b')], { radius: 450, color: u.color || '#19A55B', fillColor: u.color || '#19A55B', fillOpacity: .45, weight: 2 }).addTo(mapObj)
-      .bindPopup(`<b>${esc(u.name)}</b>, ${fmtKm(dist(ps[0]))}<br>${ps.map(p => `<a href="#plant/${p.id}">${esc(pName(p))}</a>`).join('<br>')}`);
+      .bindPopup(`<b>${esc(u.name)}</b>, ${fmtKm(dist(ps[0]))}<br>${ps.map(p => `<a href="#plant/${p.id}">${MODE[modeOf(p)].i} ${esc(pName(p))}</a>`).join('<br>')}`);
+  });
+  S.nurseries.filter(n => n.active && n.lat).forEach(n => {
+    L.marker([n.lat, n.lng], { icon: L.divIcon({ className: 'nursery-pin', html: '🌿', iconSize: [34, 34] }) }).addTo(mapObj)
+      .bindPopup(`<b>${esc(n.name)}</b><br>משתלה, ${fmtKm(dist(n))}<br><a href="#nursery/${n.id}">לעמוד המשתלה</a>`);
   });
 }
 
@@ -764,7 +953,7 @@ function initMap(near, tries = 0) {
 // הוספת צמח
 // =====================================================
 let draft = null;
-const newDraft = () => ({ step: 'photo', img: null, catId: null, guesses: [], offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup', open: true, wants: [] });
+const newDraft = () => ({ step: 'photo', img: null, catId: null, guesses: [], mode: 'swap', offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup', open: true, wants: [] });
 VIEWS.add = function () {
   if (!draft) draft = newDraft();
   const d = draft;
@@ -779,20 +968,25 @@ VIEWS.add = function () {
     const c = d.catId ? catById(d.catId) : null;
     html += d.img ? `<div class="scan" style="height:240px"><img src="${d.img}" alt="התמונה שלך"><label class="lbl" for="gal2" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div><input type="file" id="gal2" accept="image/*" class="sr" data-change="photo">` : '';
     html += `<p class="label">איזה צמח זה?</p>
-    <input class="field" id="plant-name" list="catalog" placeholder="התחילו להקליד, למשל: מונסטרה" value="${esc(c ? c.he : '')}" data-change="plantName" autocomplete="off">
-    <datalist id="catalog">${CATALOG.map(x => `<option value="${esc(x.he)}">${esc(x.sci)}</option>`).join('')}</datalist>
+    <input class="field" id="plant-name" data-suggest="name" placeholder="התחילו להקליד, למשל: מונסטרה" value="${esc(c ? c.he : '')}" data-change="plantName" autocomplete="off" enterkeyhint="done">
+    <div class="sugg" id="plant-name-sugg"></div>
     ${c ? `<p class="sci" style="margin-top:6px">${esc(c.sci)}</p>` : ''}
     <div class="err" id="add-err"></div>
+    <p class="label">מה תרצו לעשות איתו?</p>
+    <div class="modes">${Object.entries(MODE).map(([k, m]) => `<button class="mode-opt ${m.c} ${d.mode === k ? 'on' : ''}" data-a="draftSet" data-k="mode" data-v="${k}"><i>${m.i}</i><b>${k === 'swap' ? 'להחליף' : k === 'gift' ? 'למסור במתנה' : 'גם וגם'}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
     <p class="label">מה אתם מציעים?</p><div class="chips" style="gap:8px">${Object.entries(OFFER).map(([k, v]) => `<button class="sel ${d.offer === k ? 'on' : ''}" data-a="draftSet" data-k="offer" data-v="${k}">${v}</button>`).join('')}</div>
     <p class="label">מצב הצמח</p><div class="chips" style="gap:8px">${Object.entries(COND).map(([k, v]) => `<button class="sel ${d.condition === k ? 'on' : ''}" data-a="draftSet" data-k="condition" data-v="${k}">${v}</button>`).join('')}</div>
     <p class="label">כמות</p><div class="stepper"><button data-a="qty" data-v="1" aria-label="יותר">+</button><b id="qty">${d.qty}</b><button data-a="qty" data-v="-1" aria-label="פחות">−</button></div>
     <p class="label">מסירה</p><div class="chips" style="gap:8px">${Object.entries(DELIV).map(([k, v]) => `<button class="sel ${d.delivery === k ? 'on' : ''}" data-a="draftSet" data-k="delivery" data-v="${k}">${v}</button>`).join('')}</div>
-    <label class="toggle"><span><b>💚 פתוח/ה להצעות</b><br><span class="small muted">אפשר לקבל הצעות גם על צמחים שלא ברשימת המשאלות שלכם.</span></span><input type="checkbox" id="open" ${d.open ? 'checked' : ''} data-change="open"></label>
+    ${d.mode === 'gift' ? '<input type="checkbox" id="open" checked hidden>' : `<label class="toggle"><span><b>💚 פתוח/ה להצעות</b><br><span class="small muted">אפשר לקבל הצעות גם על צמחים שלא ברשימת המשאלות שלכם.</span></span><input type="checkbox" id="open" ${d.open ? 'checked' : ''} data-change="open"></label>`}
+    <div ${d.mode === 'gift' ? 'hidden' : ''}>
     <p class="label">מה הייתם רוצים לקבל בתמורה?</p>
-    <div class="row"><input class="field" id="want-in" list="catalog" placeholder="למשל: פילודנדרון" autocomplete="off"><button class="btn sun sm" data-a="addWant">הוספה</button></div>
+    <div class="row"><input class="field" id="want-in" data-suggest="want" placeholder="למשל: פילודנדרון" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWant">הוספה</button></div>
+    <div class="sugg" id="want-in-sugg"></div>
     <div class="err" id="want-err"></div>
     <div class="chips">${d.wants.map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWant" data-id="${w}" aria-label="הסרה">×</button></span>`).join('')}</div>
     <p class="small muted" style="margin-top:6px">הצמחים האלה יתווספו לרשימת המשאלות שלכם.</p>
+    </div>
     <div style="margin-top:22px"><button class="btn hot" data-a="savePlant">${ic('check')} פרסום הצמח</button><button class="btn ghost" data-a="cancelAdd">ביטול</button></div>`;
   }
   $('#view').innerHTML = html + '</div>';
@@ -804,7 +998,7 @@ function keepName() {
 }
 async function savePlant(el) {
   keepName();
-  if (!draft.catId) { $('#add-err').textContent = 'בחרו את שם הצמח מהרשימה שנפתחת כשמקלידים.'; $('#plant-name').focus(); return; }
+  if (!draft.catId) { $('#add-err').textContent = 'בחרו את שם הצמח מההצעות שמופיעות כשמקלידים.'; $('#plant-name').focus(); return; }
   busy(el, true, 'מפרסמים…');
   try {
     const ref = doc(collection(db, 'plants'));
@@ -812,7 +1006,7 @@ async function savePlant(el) {
     const pr = S.profile;
     const data = {
       ownerId: uid(), ownerName: pr.name, ownerColor: pr.color || '#19A55B', ownerPhoto: pr.photo || null, city: pr.city, lat: pr.lat, lng: pr.lng,
-      catId: draft.catId, offer: draft.offer, condition: draft.condition, qty: draft.qty, delivery: draft.delivery,
+      catId: draft.catId, mode: draft.mode, offer: draft.offer, condition: draft.condition, qty: draft.qty, delivery: draft.delivery,
       open: $('#open').checked, available: true, hasPhoto: !!draft.img, thumb, t: Date.now()
     };
     const b = writeBatch(db);
@@ -847,7 +1041,7 @@ VIEWS.matches = function () {
     const first = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
     const target = { id: r.target, ...r.targetSnap };
     return `<div class="req"><div class="row"><div class="duo"><span class="t">${visual(first[0])}</span><span class="t">${visual(target)}</span></div>
-      <div class="li-main"><b>${esc(r.fromInfo.name)}</b> רוצה להציע לך <b>${first.map(x => esc(pName(x))).join(' + ')}</b> בתמורה ל<b>${esc(pName(target))}</b> שלך.<div class="small muted">${esc(r.fromInfo.city || '')}, ${ago(r.t)}</div></div></div>
+      <div class="li-main">${first.length ? `<b>${esc(r.fromInfo.name)}</b> רוצה להציע לך <b>${first.map(x => esc(pName(x))).join(' + ')}</b> בתמורה ל<b>${esc(pName(target))}</b> שלך.` : `🎁 <b>${esc(r.fromInfo.name)}</b> ישמח/תשמח לקבל במתנה את ה<b>${esc(pName(target))}</b> שלך.`}${r.msg ? `<div class="req-msg">"${esc(r.msg)}"</div>` : ''}<div class="small muted">${esc(r.fromInfo.city || '')}, ${ago(r.t)}</div></div></div>
       <div class="req-btns"><button class="btn primary sm" style="flex:1" data-a="reqAccept" data-id="${r.id}">אישור</button><button class="btn ghost sm" style="flex:1" data-a="reqChat" data-id="${r.id}">צ'אט</button><button class="btn ghost sm" style="flex:1" data-a="reqDecline" data-id="${r.id}">דחייה</button></div></div>`;
   }).join('');
   $('#view').innerHTML = `<div class="ph"><h1>התאמות</h1></div>
@@ -861,7 +1055,7 @@ function matchRow(m) {
   const mp = snapOf(m, (m.give[me] || [])[0]), tp = snapOf(m, (m.give[o] || [])[0]);
   const n = (m.unread || {})[me] || 0;
   return `<button class="li" data-a="open" data-to="chat/${m.id}"><div class="duo"><span class="t">${visual(mp)}</span><span class="t">${visual(tp)}</span></div>
-  <div class="li-main"><div class="li-t">${esc(pName(mp))} ⇄ ${esc(pName(tp))}</div><div class="li-s">${esc(info.name)}: ${esc(m.lastMsg || '')}</div></div>
+  <div class="li-main"><div class="li-t">${!(m.give[me] || []).length ? `🎁 ${esc(pName(tp))} במתנה` : !(m.give[o] || []).length ? `🎁 ${esc(pName(mp))} במתנה ל${esc(info.name)}` : `${esc(pName(mp))} ⇄ ${esc(pName(tp))}`}</div><div class="li-s">${esc(info.name)}: ${esc(m.lastMsg || '')}</div></div>
   <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><span class="pill st-${m.status}">${STATUS[m.status]}</span>${n ? `<span class="unread">${n}</span>` : `<span class="small muted">${ago(m.lastAt)}</span>`}</div></button>`;
 }
 
@@ -898,7 +1092,9 @@ function renderSwapbar(m) {
   const me = uid(), o = otherId(m);
   const mine = (m.give[me] || []).map(pid => snapOf(m, pid)), theirs = (m.give[o] || []).map(pid => snapOf(m, pid));
   const el = $('#swapbar'); if (!el) return;
-  el.innerHTML = `<div class="row sb"><div class="row">${mine.map(x => `<span class="thumb">${visual(x)}</span>`).join('')}<b>${mine.map(x => esc(pName(x))).join(' + ')}</b></div><span aria-label="בתמורה ל">⇄</span><div class="row"><b>${theirs.map(x => esc(pName(x))).join(' + ')}</b>${theirs.map(x => `<span class="thumb">${visual(x)}</span>`).join('')}</div></div>
+  if (!mine.length) mine.push({}); if (!theirs.length) theirs.push({});
+  const nm = arr => arr.map(x => x.catId ? esc(pName(x)) : 'מתנה').join(' + ');
+  el.innerHTML = `<div class="row sb"><div class="row">${mine.map(x => `<span class="thumb">${visual(x)}</span>`).join('')}<b>${nm(mine)}</b></div><span aria-label="בתמורה ל">⇄</span><div class="row"><b>${nm(theirs)}</b>${theirs.map(x => `<span class="thumb">${visual(x)}</span>`).join('')}</div></div>
   ${m.meeting ? `<div class="small" style="margin-top:8px">${icInline('calendar', 14)} ${esc(m.meeting.place)}, ${esc(fmtWhen(m.meeting.when))}</div>` : ''}`;
 }
 function updateChatMeta() {
@@ -958,6 +1154,7 @@ window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferr
 VIEWS.profile = function () {
   const u = S.profile;
   const saved = S.priv.saved.map(id => S.pool.find(p => p.id === id)).filter(Boolean);
+  const savedPr = (S.priv.savedPromos || []).map(id => S.promos.find(p => p.id === id)).filter(Boolean);
   const history = S.matches.filter(m => m.status === 'swapped');
   const badges = [['🌱', 'מאמץ מוקדם', true], ['🌿', 'החלפה ראשונה', (u.swaps || 0) >= 1], ['🏆', 'חובב צמחים מקומי', (u.swaps || 0) >= 5], ['🔥', '10 החלפות מוצלחות', (u.swaps || 0) >= 10]];
   $('#view').innerHTML = `
@@ -968,16 +1165,19 @@ VIEWS.profile = function () {
   ${S.myPlants.length ? `<div class="grid">${S.myPlants.map(p => `<button class="mini ${p.available ? '' : 'off'}" data-a="myPlantSheet" data-id="${p.id}"><div class="mv">${visual(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}${p.available ? '' : ', לא זמין'}</div></div></button>`).join('')}</div>`
       : `<div class="empty"><p>עוד לא הוספתם צמחים.</p><button class="btn hot sm" data-a="open" data-to="add" style="margin:auto">הוספת צמח</button></div>`}
   <h2 class="section-t">רשימת המשאלות</h2>
-  <div class="addwish"><input class="field" id="wish-in" list="catalog2" placeholder="איזה צמח אתם מחפשים?" autocomplete="off"><datalist id="catalog2">${CATALOG.map(x => `<option value="${esc(x.he)}">`).join('')}</datalist><button class="btn sun sm" data-a="addWish">הוספה</button></div>
+  <div class="addwish"><input class="field" id="wish-in" data-suggest="wish" placeholder="איזה צמח אתם מחפשים?" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWish">הוספה</button></div>
+  <div class="sugg" id="wish-in-sugg" style="margin:0 18px"></div>
   <div class="err" id="wish-err" style="padding:0 18px"></div>
   <div class="wishchips chips">${(u.wishlist || []).map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWish" data-id="${w}" aria-label="הסרה">×</button></span>`).join('') || '<span class="muted small">הוסיפו צמחים, ונתריע כשמישהו באזור מציע אותם.</span>'}</div>
-  ${saved.length ? `<h2 class="section-t">שמורים</h2><div class="strip">${saved.map(miniCard).join('')}</div>` : ''}
+  ${saved.length || savedPr.length ? `<h2 class="section-t">שמורים</h2><div class="strip">${saved.map(miniCard).join('')}${savedPr.map(pr => `<button class="mini" data-a="promo" data-id="${pr.id}"><div class="mv">${promoVisual(pr)}<span class="mode m-both">🌿 משתלה</span></div><div class="mt">${esc(pr.title)}<div class="ms">${esc(pr.nurseryName)}</div></div></button>`).join('')}</div>` : ''}
   <h2 class="section-t">היסטוריית החלפות</h2>
   ${history.length ? `<div class="list">${history.map(matchRow).join('')}</div>` : '<p class="muted small" style="padding:0 18px">החלפות שתשלימו יופיעו כאן.</p>'}
   <div id="reviews"></div>
   <h2 class="section-t">הישגים</h2>
   <div class="badges">${badges.map(([i, l, on]) => `<div class="bdg ${on ? '' : 'locked'}"><i>${i}</i>${l}</div>`).join('')}</div>
-  <div class="pad"><button class="btn ghost" data-a="invite">${ic('share')} הזמנת חברים ל-${APP_NAME}</button></div>
+  <div class="pad"><button class="btn ghost" data-a="invite">${ic('share')} הזמנת חברים ל-${APP_NAME}</button>
+  ${S.myNursery ? `<button class="btn sun" data-a="open" data-to="mynursery">🌿 המשתלה שלי: ${esc(S.myNursery.name)}</button>` : `<button class="btn ghost" data-a="nurseryApply">🌿 יש לכם משתלה? הצטרפו</button>`}
+  ${isAdmin() ? `<button class="btn primary" data-a="open" data-to="admin">${ic('settings')} ניהול משתלות</button>` : ''}</div>
   <div style="height:16px"></div>`;
   loadReviews();
 };
@@ -1004,6 +1204,7 @@ function settingsSheet() {
   <div class="err" id="set-err"></div>
   <button class="btn primary" data-a="saveSettings" style="margin-top:14px">שמירה</button>
   ${deferredInstall ? `<button class="btn sun" data-a="install">${ic('download')} התקנת האפליקציה בטלפון</button>` : ''}
+  ${isIOS && !isStandalone ? `<div class="note" style="margin-top:14px">${ic('download', 20)}<span><b>להתקנה באייפון:</b> בספארי לוחצים על סמל השיתוף ואז "הוספה למסך הבית".</span></div>` : ''}
   <button class="btn ghost" data-a="signOut">${ic('logout')} התנתקות</button>
   <p class="small center" style="margin-top:16px"><a href="privacy.html">מדיניות פרטיות</a></p>
   <button class="btn ghost danger" data-a="deleteAccount">${ic('trash')} מחיקת החשבון</button>`);
@@ -1025,7 +1226,9 @@ function filtersSheet() {
   const f = filters, u = S.profile;
   const grp = (k, obj) => `<div class="chips" style="gap:8px"><button class="sel ${f[k] === 'all' ? 'on' : ''}" data-a="setFilter" data-k="${k}" data-v="all">הכול</button>${Object.entries(obj).map(([kk, v]) => `<button class="sel ${f[k] === kk ? 'on' : ''}" data-a="setFilter" data-k="${k}" data-v="${kk}">${v}</button>`).join('')}</div>`;
   sheet(`<h3>מה לחפש?</h3>
-  <p class="label">מרחק מ${esc(u.city)}</p><div class="chips" style="gap:8px">${RADII.map(r => `<button class="sel ${r === u.radius ? 'on' : ''}" data-a="filterRadius" data-r="${r}">${radiusLabel(r)}</button>`).join('')}</div>
+  <label class="toggle" style="margin-top:6px"><span><b>📍 לפי המקום שבו אני עכשיו</b><br><span class="small muted">${S.here ? `מזוהה: ${esc(S.here.city)}` : `כבוי: מחפשים לפי ${esc(u.city)}`}</span></span><input type="checkbox" data-change="liveLoc" ${S.here ? 'checked' : ''}></label>
+  <p class="label">מרחק מ${esc(locLabel())}</p><div class="chips" style="gap:8px">${RADII.map(r => `<button class="sel ${r === u.radius ? 'on' : ''}" data-a="filterRadius" data-r="${r}">${radiusLabel(r)}</button>`).join('')}</div>
+  <p class="label">מה מחפשים?</p>${grp('mode', { swap: '🔄 החלפה', gift: '🎁 מתנה' })}
   <p class="label">סוג צמח</p>${grp('cat', CATS)}
   <p class="label">סוג החלפה</p>${grp('offer', OFFER)}
   <p class="label">מסירה</p>${grp('delivery', { pickup: 'איסוף', shipping: 'משלוח' })}
@@ -1053,6 +1256,133 @@ function reportSheet(mid) {
   <div class="pick">${REPORT_REASONS.map((r, i) => `<label class="pick-item"><input type="radio" name="reason" value="${esc(r)}" ${i === 0 ? 'checked' : ''}><span>${esc(r)}</span></label>`).join('')}</div>
   <textarea class="field" id="rep-txt" rows="3" maxlength="500" placeholder="פרטים נוספים (לא חובה)"></textarea>
   <button class="btn hot" data-a="sendReport" data-id="${mid}" style="margin-top:12px">שליחת דיווח</button>`);
+}
+
+// =====================================================
+// משתלות: עמוד משתלה, ניהול המשתלה שלי, פאנל ניהול
+// =====================================================
+VIEWS.nursery = async function (id) {
+  let n = nurseryById(id);
+  if (!n) {
+    $('#view').innerHTML = `<div class="loading"><span class="spin big"></span></div>`;
+    try { const s2 = await getDoc(doc(db, 'nurseries', id)); if (s2.exists()) n = { id, ...s2.data() }; } catch (e) { errLog(e); }
+    if (curRoute()[1] !== id) return;
+  }
+  if (!n) { $('#view').innerHTML = `<div class="empty"><h3>המשתלה לא נמצאה</h3><button class="btn hot sm" data-a="open" data-to="discover" style="margin:12px auto 0">חזרה לגילוי</button></div>`; return; }
+  const now = Date.now();
+  const promos = S.promos.filter(p => p.nurseryId === id && p.active && (!p.until || p.until >= now));
+  promos.forEach(countView);
+  $('#view').innerHTML = `
+  <div class="detail-v nursery-cover">${n.img ? `<div class="photo"><img src="${n.img}" alt=""></div>` : `<div class="art nursery-art big">🌿</div>`}<button class="icon-btn back" data-a="back" aria-label="חזרה">${ic('back')}</button></div>
+  <div class="pad">
+    <span class="badge b-nursery" style="position:static;display:inline-block">🌿 משתלה</span>
+    <h1 style="font-size:30px;font-weight:900;margin-top:8px">${esc(n.name)}</h1>
+    <p class="muted">${esc(n.address || n.city || '')}${n.lat ? `, ${fmtKm(dist(n))} ממך` : ''}</p>
+    ${n.hours ? `<p class="small">🕒 ${esc(n.hours)}</p>` : ''}
+    ${n.about ? `<p>${esc(n.about)}</p>` : ''}
+    ${contactBtns(n)}
+    <h2 class="section-t" style="margin:24px 0 10px">הצעות עכשיו</h2>
+    ${promos.length ? `<div class="col">${promos.map(pr => `<button class="promo-row" data-a="promo" data-id="${pr.id}"><span class="thumb">${promoVisual(pr)}</span><span class="li-main"><b>${esc(pr.title)}</b>${pr.deal ? `<span class="deal sm">${esc(pr.deal)}</span>` : ''}</span></button>`).join('')}</div>`
+      : '<p class="muted small">אין כרגע הצעות פעילות. שווה לקפוץ לבקר!</p>'}
+  </div>`;
+};
+let pd = null;
+VIEWS.mynursery = async function () {
+  $('#view').innerHTML = `<div class="loading"><span class="spin big"></span></div>`;
+  await loadMyNursery();
+  const n = S.myNursery;
+  if (!n) { go('profile'); return; }
+  let mine = [];
+  try { const s2 = await getDocs(query(collection(db, 'promos'), where('nurseryId', '==', n.id))); mine = s2.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.t || 0) - (a.t || 0)); } catch (e) { errLog(e); }
+  S.myPromos = mine;
+  const views = mine.reduce((a, p) => a + (p.views || 0), 0), clicks = mine.reduce((a, p) => a + (p.clicks || 0), 0);
+  $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="profile" aria-label="חזרה">${ic('back')}</button><h1>${esc(n.name)}</h1></div>
+  <div class="pad" style="padding-top:0">
+    ${n.active ? '' : `<div class="note">${ic('shield', 20)}<span>המשתלה עוד לא פעילה. אפשר כבר להכין הצעות, והן יופיעו למשתמשים אחרי ההפעלה.</span></div>`}
+    <div class="stats" style="margin:14px 0 0"><div class="stat"><b>${mine.filter(p => p.active).length}</b><span>הצעות פעילות</span></div><div class="stat"><b>${views}</b><span>צפיות</span></div><div class="stat"><b>${clicks}</b><span>לחיצות</span></div></div>
+    <button class="btn hot" data-a="newPromo" style="margin-top:18px">${ic('plus')} פרסום הצעה חדשה</button>
+    <button class="btn ghost" data-a="editNursery">עריכת פרטי המשתלה</button>
+    <h2 class="section-t" style="margin:24px 0 10px">ההצעות שלי</h2>
+    ${mine.length ? `<div class="col">${mine.map(pr => `<div class="promo-row ${pr.active ? '' : 'off'}"><span class="thumb">${promoVisual(pr)}</span><span class="li-main"><b>${esc(pr.title)}</b><span class="small muted">👁 ${pr.views || 0} צפיות, 👆 ${pr.clicks || 0} לחיצות${pr.until ? `, עד ${new Date(pr.until).toLocaleDateString('he-IL')}` : ''}</span></span>
+      <label class="mini-toggle" aria-label="פעילה"><input type="checkbox" data-change="promoActive" data-id="${pr.id}" ${pr.active ? 'checked' : ''}></label>
+      <button class="icon-btn" data-a="delPromo" data-id="${pr.id}" aria-label="מחיקה">${ic('trash', 18)}</button></div>`).join('')}</div>`
+      : '<p class="muted small">עוד אין הצעות. הצעה טובה: תמונה יפה, שם הצמח, ומבצע ברור כמו "2 ב-50 ₪".</p>'}
+  </div><div style="height:20px"></div>`;
+};
+VIEWS.promonew = function () {
+  if (!S.myNursery) { go('profile'); return; }
+  if (!pd) pd = { img: null, title: '', catId: null, deal: '', text: '', until: '', radius: 25 };
+  $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="mynursery" aria-label="חזרה">${ic('back')}</button><h1>הצעה חדשה</h1></div>
+  <div class="pad" style="padding-top:4px">
+    ${pd.img ? `<div class="scan" style="height:220px"><img src="${pd.img}" alt=""><label class="lbl" for="pr-img" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div>` : `<label class="drop" for="pr-img" style="height:200px"><div class="big">${ic('camera', 40)}</div><h2>תמונה של ההצעה</h2></label>`}
+    <input type="file" id="pr-img" accept="image/*" class="sr" data-change="promoPhoto">
+    <p class="label">כותרת</p><input class="field" id="pr-title" maxlength="60" placeholder="למשל: מונסטרות ענקיות הגיעו!" value="${esc(pd.title)}">
+    <p class="label">איזה צמח? (כדי שנתריע למי שמחפש אותו)</p>
+    <input class="field" id="pr-cat" data-suggest="promo" placeholder="התחילו להקליד" autocomplete="off" value="${esc(pd.catId ? catById(pd.catId).he : '')}"><div class="sugg" id="pr-cat-sugg"></div>
+    <p class="label">המבצע</p><input class="field" id="pr-deal" maxlength="40" placeholder="למשל: 2 ב-50 ₪, או 20% הנחה" value="${esc(pd.deal)}">
+    <p class="label">כמה מילים (לא חובה)</p><textarea class="field" id="pr-text" rows="3" maxlength="300" placeholder="מה מיוחד בהצעה?">${esc(pd.text)}</textarea>
+    <p class="label">בתוקף עד (לא חובה)</p><input type="date" class="field" id="pr-until" value="${esc(pd.until)}">
+    <p class="label">למי להציג?</p><div class="chips" style="gap:8px">${[10, 25, 50].map(r => `<button class="sel ${pd.radius === r ? 'on' : ''}" data-a="promoRadius" data-r="${r}">עד ${r} ק״מ</button>`).join('')}</div>
+    <div class="err" id="pr-err"></div>
+    <div style="margin-top:20px"><button class="btn hot" data-a="savePromo">${ic('check')} פרסום ההצעה</button><button class="btn ghost" data-a="cancelPromo">ביטול</button></div>
+  </div>`;
+};
+function keepPromo() {
+  if (!pd) return;
+  const g = id => ($('#' + id) || {}).value;
+  pd.title = g('pr-title') ?? pd.title; pd.deal = g('pr-deal') ?? pd.deal; pd.text = g('pr-text') ?? pd.text; pd.until = g('pr-until') ?? pd.until;
+  const c = catByName(g('pr-cat')); if (c) pd.catId = c.id;
+}
+function nurseryEditSheet() {
+  const n = S.myNursery;
+  sheet(`<h3>פרטי המשתלה</h3>
+  <p class="label">טלפון</p><input class="field" id="n-phone" type="tel" value="${esc(n.phone || '')}">
+  <p class="label">וואטסאפ (אם שונה מהטלפון)</p><input class="field" id="n-wa" type="tel" value="${esc(n.whatsapp || '')}">
+  <p class="label">כתובת</p><input class="field" id="n-addr" value="${esc(n.address || '')}" placeholder="רחוב ומספר, עיר">
+  <p class="label">שעות פתיחה</p><input class="field" id="n-hours" value="${esc(n.hours || '')}" placeholder="א׳-ה׳ 8:00-19:00, ו׳ 8:00-14:00">
+  <p class="label">על המשתלה</p><textarea class="field" id="n-about" rows="3" maxlength="400">${esc(n.about || '')}</textarea>
+  <p class="label">תמונה ראשית</p><label class="btn ghost" for="n-img">${ic('image')} ${n.img ? 'החלפת תמונה' : 'הוספת תמונה'}</label><input type="file" id="n-img" accept="image/*" class="sr" data-change="nurseryImg">
+  <button class="btn sun" data-a="nurseryHere">${ic('pin')} אני עכשיו במשתלה: שמירת המיקום</button>
+  <p class="small muted">${n.lat ? 'יש מיקום שמור. ' : ''}המיקום עוזר להציג את ההצעות לאנשים קרובים ולנווט אליכם.</p>
+  <div class="err" id="n-err"></div>
+  <button class="btn primary" data-a="saveNursery" style="margin-top:10px">שמירה</button>`);
+}
+function nurseryApplySheet() {
+  sheet(`<h3>🌿 הצטרפות משתלה</h3><p class="muted">הציגו את ההצעות שלכם לאנשים שאוהבים צמחים, ממש בשכונה. השאירו פרטים ונחזור אליכם.</p>
+  <p class="label">שם המשתלה</p><input class="field" id="ap-name" maxlength="50">
+  <p class="label">עיר</p><select class="field" id="ap-city">${CITIES.map(c => `<option ${c.n === S.profile.city ? 'selected' : ''}>${c.n}</option>`).join('')}</select>
+  <p class="label">טלפון</p><input class="field" id="ap-phone" type="tel">
+  <p class="label">שם איש/אשת קשר</p><input class="field" id="ap-contact" value="${esc(S.profile.name)}">
+  <p class="label">משהו נוסף? (לא חובה)</p><textarea class="field" id="ap-notes" rows="2" maxlength="300"></textarea>
+  <div class="err" id="ap-err"></div>
+  <button class="btn hot" data-a="sendApply" style="margin-top:12px">שליחת בקשה</button>`);
+}
+VIEWS.admin = async function () {
+  if (!isAdmin()) { go('profile'); return; }
+  $('#view').innerHTML = `<div class="loading"><span class="spin big"></span></div>`;
+  let apps = [], ns = [], ps = [];
+  try {
+    const [a, b, c] = await Promise.all([
+      getDocs(query(collection(db, 'nurseryApplications'), where('status', '==', 'pending'))),
+      getDocs(collection(db, 'nurseries')), getDocs(collection(db, 'promos'))
+    ]);
+    apps = a.docs.map(d => ({ id: d.id, ...d.data() })); ns = b.docs.map(d => ({ id: d.id, ...d.data() })); ps = c.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (e) { errLog(e); $('#view').innerHTML = `<div class="empty"><h3>אין גישה</h3><p>בדקו שכללי האבטחה העדכניים פורסמו ב-Firebase.</p></div>`; return; }
+  S.adminApps = apps;
+  const st = id => { const x = ps.filter(p => p.nurseryId === id); return { n: x.filter(p => p.active).length, v: x.reduce((a, p) => a + (p.views || 0), 0), c: x.reduce((a, p) => a + (p.clicks || 0), 0) }; };
+  $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="profile" aria-label="חזרה">${ic('back')}</button><h1>ניהול משתלות</h1></div>
+  <h2 class="section-t" style="margin-top:4px">בקשות הצטרפות (${apps.length})</h2>
+  ${apps.length ? apps.map(a => `<div class="req"><b>${esc(a.name)}</b>, ${esc(a.city)}<div class="small">${esc(a.contact || '')}, <a href="tel:${esc(a.phone)}">${esc(a.phone)}</a>, ${esc(a.email)}</div>${a.notes ? `<div class="req-msg">"${esc(a.notes)}"</div>` : ''}
+    <div class="req-btns"><button class="btn primary sm" style="flex:1" data-a="adminApprove" data-id="${a.id}">אישור והפעלה</button><button class="btn ghost sm" style="flex:1" data-a="adminDecline" data-id="${a.id}">דחייה</button></div></div>`).join('') : '<p class="muted small" style="padding:0 18px">אין בקשות חדשות.</p>'}
+  <h2 class="section-t">משתלות (${ns.length})</h2>
+  <div class="list">${ns.map(n => { const x = st(n.id); return `<div class="li"><span class="thumb">${n.img ? `<div class="photo"><img src="${n.img}" alt=""></div>` : '<div class="art nursery-art">🌿</div>'}</span><div class="li-main"><div class="li-t">${esc(n.name)}</div><div class="li-s">${esc(n.ownerEmail || '')}</div><div class="small muted">${x.n} הצעות, 👁 ${x.v}, 👆 ${x.c}</div></div><label class="mini-toggle" aria-label="פעילה"><input type="checkbox" data-change="nurseryActive" data-id="${n.id}" ${n.active ? 'checked' : ''}></label></div>`; }).join('') || '<div class="empty">עוד אין משתלות.</div>'}</div>
+  <div class="pad"><button class="btn ghost" data-a="adminAdd">${ic('plus')} הוספת משתלה ידנית</button></div>`;
+};
+async function createNursery(d) {
+  const c = CITIES.find(x => x.n === d.city) || CITIES[0];
+  const ref = doc(collection(db, 'nurseries'));
+  await setDoc(ref, { name: d.name, city: c.n, lat: c.lat, lng: c.lng, phone: d.phone || '', whatsapp: d.phone || '', address: '', hours: '', about: '', img: null, ownerEmail: (d.email || '').toLowerCase().trim(), ownerUid: d.uid || null, active: true, createdAt: Date.now() });
+  return ref.id;
 }
 
 // =====================================================
@@ -1103,6 +1433,11 @@ const A = {
   decide: el => decide(el.dataset.d),
   undo: () => {
     if (!lastSwipe) return;
+    if (lastSwipe.promo) {
+      const ps = { ...(S.priv.promoSeen || {}) }; delete ps[lastSwipe.promo]; S.priv.promoSeen = ps;
+      if (lastSwipe.a === 'save') S.priv.savedPromos = (S.priv.savedPromos || []).filter(x => x !== lastSwipe.promo);
+      lastSwipe = null; savePriv(); renderDeck(); return;
+    }
     delete S.priv.swipes[lastSwipe.id];
     if (lastSwipe.a === 'save') S.priv.saved = S.priv.saved.filter(x => x !== lastSwipe.id);
     lastSwipe = null; savePriv(); renderDeck();
@@ -1126,7 +1461,7 @@ const A = {
   qty: el => { draft.qty = Math.max(1, Math.min(99, draft.qty + +el.dataset.v)); $('#qty').textContent = draft.qty; },
   addWant: () => {
     const c = catByName($('#want-in').value);
-    if (!c) { $('#want-err').textContent = 'בחרו צמח מהרשימה שנפתחת כשמקלידים.'; return; }
+    if (!c) { $('#want-err').textContent = 'בחרו צמח מההצעות שמופיעות כשמקלידים.'; return; }
     keepName();
     if (!draft.wants.includes(c.id)) draft.wants.push(c.id);
     VIEWS.add();
@@ -1197,6 +1532,107 @@ const A = {
     closeSheet(); toast(`${n} נחסם/ה`); go('matches');
   },
 
+  copyLink: async () => { try { await navigator.clipboard.writeText(location.href); toast('הקישור הועתק. הדביקו אותו בספארי או בכרום.'); } catch (e) { toast(location.href); } },
+  pickSugg: el => {
+    const inp = $('#' + el.dataset.for); if (!inp) return;
+    inp.value = el.dataset.v;
+    const box = $('#' + el.dataset.for + '-sugg'); if (box) box.innerHTML = '';
+    const kind = inp.dataset.suggest;
+    if (kind === 'name') { inp.dispatchEvent(new Event('change', { bubbles: true })); inp.blur(); VIEWS.add(); }
+    else if (kind === 'want') A.addWant();
+    else if (kind === 'wish') A.addWish();
+    else if (kind === 'promo') { keepPromo(); }
+  },
+
+  // מיקום
+  useLive: () => { lsSet('ll_live', '1'); locate(true); const b = $('.live-ask'); if (b) b.remove(); },
+  noLive: () => { lsSet('ll_live_ask', '0'); const b = $('.live-ask'); if (b) b.remove(); },
+
+  // משתלות
+  promo: el => { const pr = S.promos.find(x => x.id === el.dataset.id) || (S.myPromos || []).find(x => x.id === el.dataset.id); if (pr) openPromo(pr); },
+  nurseryApply: () => { if (lsGet('ll_applied') === '1') { toast('כבר קיבלנו את הבקשה שלכם. נחזור אליכם בקרוב 🌿'); return; } nurseryApplySheet(); },
+  sendApply: async el => {
+    const v = id => $('#' + id).value.trim();
+    if (!v('ap-name') || !v('ap-phone')) { $('#ap-err').textContent = 'מלאו שם משתלה וטלפון.'; return; }
+    busy(el, true, 'שולחים…');
+    try {
+      await addDoc(collection(db, 'nurseryApplications'), { uid: uid(), email: (S.me.email || '').toLowerCase(), name: v('ap-name'), city: v('ap-city'), phone: v('ap-phone'), contact: v('ap-contact'), notes: v('ap-notes'), status: 'pending', t: Date.now() });
+      lsSet('ll_applied', '1'); closeSheet(); toast('קיבלנו! נחזור אליכם בקרוב 🌿');
+    } catch (e) { errLog(e); busy(el, false); $('#ap-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
+  },
+  newPromo: () => { pd = null; go('promonew'); },
+  cancelPromo: () => { pd = null; go('mynursery'); },
+  promoRadius: el => { keepPromo(); pd.radius = +el.dataset.r; VIEWS.promonew(); },
+  savePromo: async el => {
+    keepPromo();
+    if (!pd.title.trim()) { $('#pr-err').textContent = 'כתבו כותרת להצעה.'; return; }
+    const n = S.myNursery;
+    busy(el, true, 'מפרסמים…');
+    try {
+      const thumb = pd.img ? await shrinkDataUrl(pd.img, 260, .62) : null;
+      await addDoc(collection(db, 'promos'), {
+        nurseryId: n.id, nurseryName: n.name, ownerEmail: (S.me.email || '').toLowerCase(), title: pd.title.trim(), catId: pd.catId || null,
+        deal: pd.deal.trim(), text: pd.text.trim(), img: pd.img, thumb, lat: n.lat, lng: n.lng, city: n.city, radius: pd.radius,
+        until: pd.until ? new Date(pd.until + 'T23:59:59').getTime() : null, active: true, views: 0, clicks: 0, t: Date.now()
+      });
+      pd = null; S.poolAt = 0; loadPool(true).catch(errLog);
+      go('mynursery'); setTimeout(() => toast('ההצעה פורסמה 🌿'), 300);
+    } catch (e) { errLog(e); busy(el, false); $('#pr-err').textContent = 'הפרסום לא הצליח. נסו שוב.'; }
+  },
+  delPromo: async el => {
+    if (!confirm('למחוק את ההצעה?')) return;
+    try { await deleteDoc(doc(db, 'promos', el.dataset.id)); VIEWS.mynursery(); toast('ההצעה נמחקה'); } catch (e) { errLog(e); toast('המחיקה לא הצליחה.'); }
+  },
+  editNursery: nurseryEditSheet,
+  nurseryHere: el => {
+    if (!navigator.geolocation) return;
+    busy(el, true, 'מאתרים…');
+    navigator.geolocation.getCurrentPosition(pos => {
+      S.myNursery._lat = +pos.coords.latitude.toFixed(5); S.myNursery._lng = +pos.coords.longitude.toFixed(5);
+      busy(el, false); el.innerHTML = `${ic('check')} המיקום נקלט. לחצו שמירה.`;
+    }, () => { busy(el, false); toast('לא הצלחנו לאתר מיקום.'); }, { enableHighAccuracy: true, timeout: 15000 });
+  },
+  saveNursery: async el => {
+    const n = S.myNursery, v = id => $('#' + id).value.trim();
+    const patch = { phone: v('n-phone'), whatsapp: v('n-wa'), address: v('n-addr'), hours: v('n-hours'), about: v('n-about') };
+    if (n._img) patch.img = n._img;
+    if (n._lat) { patch.lat = n._lat; patch.lng = n._lng; }
+    busy(el, true, 'שומרים…');
+    try {
+      await updateDoc(doc(db, 'nurseries', n.id), patch);
+      if (patch.lat) { const b = writeBatch(db); (S.myPromos || []).forEach(pr => b.update(doc(db, 'promos', pr.id), { lat: patch.lat, lng: patch.lng })); await b.commit(); }
+      delete n._img; delete n._lat; delete n._lng;
+      closeSheet(); VIEWS.mynursery(); toast('הפרטים נשמרו');
+    } catch (e) { errLog(e); busy(el, false); $('#n-err').textContent = 'השמירה לא הצליחה. נסו שוב.'; }
+  },
+  adminApprove: async el => {
+    const a = (S.adminApps || []).find(x => x.id === el.dataset.id); if (!a) return;
+    busy(el, true);
+    try {
+      const nid = await createNursery(a);
+      await updateDoc(doc(db, 'nurseryApplications', a.id), { status: 'approved', nurseryId: nid });
+      toast(`${a.name} הופעלה 🌿`); VIEWS.admin();
+    } catch (e) { errLog(e); busy(el, false); toast('האישור לא הצליח.'); }
+  },
+  adminDecline: async el => {
+    try { await updateDoc(doc(db, 'nurseryApplications', el.dataset.id), { status: 'declined' }); VIEWS.admin(); } catch (e) { errLog(e); toast('לא הצליח.'); }
+  },
+  adminAdd: () => sheet(`<h3>הוספת משתלה</h3>
+    <p class="label">שם המשתלה</p><input class="field" id="ad-name">
+    <p class="label">עיר</p><select class="field" id="ad-city">${CITIES.map(c => `<option>${c.n}</option>`).join('')}</select>
+    <p class="label">טלפון</p><input class="field" id="ad-phone" type="tel">
+    <p class="label">האימייל של בעל/ת המשתלה (חשבון Google)</p><input class="field" id="ad-email" type="email" dir="ltr">
+    <p class="small muted">מי שמתחבר/ת עם האימייל הזה יוכל/תוכל לנהל את המשתלה ולפרסם הצעות.</p>
+    <div class="err" id="ad-err"></div>
+    <button class="btn hot" data-a="adminSave" style="margin-top:12px">יצירה</button>`),
+  adminSave: async el => {
+    const v = id => $('#' + id).value.trim();
+    if (!v('ad-name') || !v('ad-email').includes('@')) { $('#ad-err').textContent = 'מלאו שם ואימייל תקין.'; return; }
+    busy(el, true);
+    try { await createNursery({ name: v('ad-name'), city: v('ad-city'), phone: v('ad-phone'), email: v('ad-email') }); closeSheet(); toast('המשתלה נוספה'); VIEWS.admin(); }
+    catch (e) { errLog(e); busy(el, false); $('#ad-err').textContent = 'היצירה לא הצליחה.'; }
+  },
+
   // פרופיל
   settings: settingsSheet,
   install: async () => { if (!deferredInstall) return; deferredInstall.prompt(); await deferredInstall.userChoice.catch(() => { }); deferredInstall = null; closeSheet(); },
@@ -1223,10 +1659,16 @@ const A = {
   },
   deleteAccount: async el => {
     if (!confirm('למחוק את החשבון לצמיתות? הצמחים, רשימת המשאלות וההצעות שלכם יימחקו. אי אפשר לבטל את זה.')) return;
+    const lastIn = Date.parse((auth.currentUser.metadata || {}).lastSignInTime || 0) || 0;
+    const fresh = Date.now() - lastIn < 4 * 60e3;
+    if (!fresh && isMobile) {
+      sheet(`<h3>צריך להתחבר מחדש</h3><p class="muted">מטעמי אבטחה, אפשר למחוק חשבון רק מיד אחרי התחברות. התנתקו, התחברו שוב, ואז חזרו לכאן ומחקו.</p><button class="btn hot" data-a="signOut">התנתקות</button><button class="btn ghost" data-a="closeSheet">ביטול</button>`);
+      return;
+    }
     busy(el, true, 'מוחקים…');
     const me = uid();
     try {
-      await reauthenticateWithPopup(auth.currentUser, new GoogleAuthProvider());
+      if (!fresh) await reauthenticateWithPopup(auth.currentUser, new GoogleAuthProvider());
       const b = writeBatch(db);
       S.myPlants.forEach(p => { b.delete(doc(db, 'plants', p.id)); if (p.hasPhoto) b.delete(doc(db, 'photos', p.id)); });
       const lk = await getDocs(query(collection(db, 'likes'), where('from', '==', me)));
@@ -1246,7 +1688,7 @@ const A = {
   },
   addWish: async () => {
     const c = catByName($('#wish-in').value);
-    if (!c) { $('#wish-err').textContent = 'בחרו צמח מהרשימה שנפתחת כשמקלידים.'; return; }
+    if (!c) { $('#wish-err').textContent = 'בחרו צמח מההצעות שמופיעות כשמקלידים.'; return; }
     if ((S.profile.wishlist || []).includes(c.id)) { $('#wish-in').value = ''; return; }
     try {
       await updateDoc(doc(db, 'users', uid()), { wishlist: arrayUnion(c.id) });
@@ -1298,6 +1740,15 @@ document.addEventListener('change', async e => {
   if (k === 'chatImg' && el.files[0]) { try { sendMsg(el.dataset.id, '', await compress(el.files[0], 680, .7)); } catch (err) { toast('לא הצלחנו לשלוח את התמונה.'); } }
   if (k === 'avail') updateDoc(doc(db, 'plants', el.dataset.id), { available: el.checked }).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
   if (k === 'popen') updateDoc(doc(db, 'plants', el.dataset.id), { open: el.checked }).catch(errLog);
+  if (k === 'liveLoc') {
+    if (el.checked) { lsSet('ll_live', '1'); locate(true); }
+    else { lsSet('ll_live', '0'); S.here = null; }
+    setTimeout(filtersSheet, el.checked ? 1500 : 0);
+  }
+  if (k === 'promoActive') updateDoc(doc(db, 'promos', el.dataset.id), { active: el.checked }).then(() => toast(el.checked ? 'ההצעה פעילה' : 'ההצעה הוסתרה')).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
+  if (k === 'nurseryActive') updateDoc(doc(db, 'nurseries', el.dataset.id), { active: el.checked }).then(() => toast(el.checked ? 'המשתלה הופעלה' : 'המשתלה הושהתה')).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
+  if (k === 'promoPhoto' && el.files[0]) { try { keepPromo(); pd.img = await compress(el.files[0], 760, .72); VIEWS.promonew(); } catch (err) { toast('לא הצלחנו לקרוא את התמונה.'); } }
+  if (k === 'nurseryImg' && el.files[0]) { try { S.myNursery._img = await compress(el.files[0], 760, .72); toast('התמונה נקלטה. לחצו שמירה.'); } catch (err) { toast('לא הצלחנו לקרוא את התמונה.'); } }
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.dataset && e.target.dataset.enter === 'send') { e.preventDefault(); A.send(e.target); }
@@ -1310,7 +1761,26 @@ document.addEventListener('keydown', e => {
     if (e.key === 'ArrowUp') decide('super');
   }
 });
-document.addEventListener('input', e => { const er = e.target.closest('.pad, .ob, #sheet'); if (er) $$('.err', er).forEach(x => { x.textContent = ''; }); });
+document.addEventListener('input', e => {
+  const er = e.target.closest('.pad, .ob, #sheet, #view'); if (er) $$('.err', er).forEach(x => { x.textContent = ''; });
+  const t = e.target;
+  if (t.dataset && t.dataset.suggest) {
+    const box = $('#' + t.id + '-sugg'); if (!box) return;
+    const q = t.value.trim().toLowerCase();
+    const res = q ? CATALOG.filter(c => c.he.toLowerCase().includes(q) || c.sci.toLowerCase().includes(q)).slice(0, 6) : [];
+    box.innerHTML = res.map(c => `<button type="button" data-a="pickSugg" data-for="${t.id}" data-v="${esc(c.he)}"><b>${esc(c.he)}</b><span>${esc(c.sci)}</span></button>`).join('');
+  }
+});
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (e.key === 'Enter' && t.dataset && t.dataset.suggest) {
+    e.preventDefault();
+    const first = $('#' + t.id + '-sugg button'); if (first) first.click();
+    else if (t.dataset.suggest === 'want') A.addWant();
+    else if (t.dataset.suggest === 'wish') A.addWish();
+    else t.blur();
+  }
+});
 window.addEventListener('hashchange', route);
 window.addEventListener('online', () => toast('חזרתם לאינטרנט 🌿'));
 window.addEventListener('offline', () => toast('אין חיבור לאינטרנט. השינויים יישמרו כשתתחברו.'));
@@ -1320,7 +1790,11 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
 if (!cfgOk) route();
 else {
   route();
-  getRedirectResult(auth).catch(e => { if (e.code === 'auth/unauthorized-domain') toast('הכתובת של האתר עוד לא אושרה ב-Firebase (README, שלב 3).'); });
+  getRedirectResult(auth).catch(e => {
+    errLog(e);
+    if (e.code === 'auth/unauthorized-domain') toast('הכתובת של האתר עוד לא אושרה ב-Firebase (README, שלב 3).');
+    else if (e.code !== 'auth/no-auth-event') toast('ההתחברות לא הושלמה. נסו שוב.');
+  }).finally(() => { try { sessionStorage.removeItem('ll_redirect'); } catch (e) { } });
   onAuthStateChanged(auth, async user => {
     unsubAll();
     S.authKnown = true; S.me = user; S.booted = false; S.profile = null;
