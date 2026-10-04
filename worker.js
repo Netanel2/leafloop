@@ -2,7 +2,8 @@
 // 1. מעביר את דפי ההתחברות של Google/Firebase דרך הכתובת של האתר (בשביל אייפון).
 // 2. נותן לאפליקציה פרטי "ממסר" (TURN) לשיחות קוליות, כדי שיתחברו גם בסלולר.
 const FIREBASE_HOST = 'leafloop-f882c.firebaseapp.com';
-const WORKER_VERSION = '28';
+const WORKER_VERSION = '29';
+const CANONICAL = 'https://leafloop-nine.vercel.app';
 const PROJECT_ID = 'leafloop-f882c';
 
 // בדיקה שהבקשה מגיעה ממשתמש מחובר של LeafLoop (אימות ה-ID Token של Firebase)
@@ -210,6 +211,10 @@ export default {
     const url = new URL(request.url);
     // איזו גרסה של השרת רצה עכשיו (לבדיקה)
     if (url.pathname === '/api/version') return new Response(JSON.stringify({ worker: WORKER_VERSION, push: !!env.FIREBASE_SA }), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+    // הכתובת הישנה (workers.dev) מעבירה לכתובת הראשית. רק דפים, לא /fb/ ולא /api/ שהכתובת הראשית משתמשת בהם.
+    if (url.hostname.endsWith('.workers.dev') && request.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      return Response.redirect(CANONICAL + '/' + url.search, 302);
+    }
     // קבצים פנימיים (git, הגדרות, קוד השרת) לא נגישים מבחוץ
     if (/^\/\./.test(url.pathname) || /^\/(wrangler\.jsonc|worker\.js|README\.md|firestore\.rules|_redirects|vercel\.json)$/i.test(url.pathname)) {
       return new Response('Not found', { status: 404 });

@@ -1,6 +1,8 @@
 // Service worker: מאפשר התקנה כאפליקציה ופתיחה מהירה.
 // בכל עדכון גדול אפשר להעלות את המספר כדי לרענן את הקבצים השמורים.
-const V = 'leafloop-v26';
+const V = 'leafloop-v27';
+// הכתובת הראשית של האפליקציה. כל לחיצה על התראה פותחת אותה.
+const APP_URL = 'https://leafloop-nine.vercel.app/';
 const SHELL = ['./', 'index.html', 'boot.js', 'style.css', 'app.js', 'art.js', 'data.js', 'fb.js', 'firebase-config.js', 'icon.svg', 'icon-192.png', 'manifest.webmanifest'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).catch(() => {})); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -25,9 +27,9 @@ self.addEventListener('push', e => {
 });
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const url = new URL((e.notification.data && e.notification.data.url) || './', self.registration.scope).href;
+  const url = new URL((e.notification.data && e.notification.data.url) || './', APP_URL).href;
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
-    for (const c of cs) { if (c.url.startsWith(self.registration.scope) && 'focus' in c) { return c.focus().then(w => (w && w.navigate ? w.navigate(url) : null)).catch(() => self.clients.openWindow(url)); } }
+    for (const c of cs) { if (c.url.startsWith(APP_URL) && 'focus' in c) { return c.focus().then(w => (w && w.navigate ? w.navigate(url) : null)).catch(() => self.clients.openWindow(url)); } }
     return self.clients.openWindow(url);
   }));
 });
