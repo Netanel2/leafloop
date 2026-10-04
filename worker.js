@@ -48,9 +48,23 @@ async function turnServers(env) {
 // ===== הודעות פוש (Firebase Cloud Messaging) =====
 // צריך Secret בשם FIREBASE_SA עם קובץ ה-Service Account של Firebase (הסבר ב-README)
 let GTOK = null, GTOK_EXP = 0;
+// קורא את מפתח ה-Service Account גם אם ההדבקה יצאה קצת שבורה (מרכאות, שורות, תווים נסתרים)
+function parseSA(raw) {
+  const t = String(raw || '').replace(/^\uFEFF/, '').trim();
+  const tryJ = x => { try { const o = JSON.parse(x); return typeof o === 'string' ? JSON.parse(o) : o; } catch (e) { return null; } };
+  let o = tryJ(t);
+  if (!o && t.includes('{')) o = tryJ(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
+  if (!o) { try { o = tryJ(atob(t)); } catch (e) { } }
+  if (o && o.client_email && o.private_key) return { ...o, private_key: String(o.private_key).replace(/\\n/g, '\n') };
+  const em = t.match(/client_email\W+([^"\s,\\]+@[^"\s,\\]+)/);
+  const pk = t.replace(/\\\\n/g, '\n').replace(/\\n/g, '\n').match(/-----BEGIN PRIVATE KEY-----[\s\S]+?-----END PRIVATE KEY-----/);
+  if (em && pk) return { client_email: em[1], private_key: pk[0] };
+  // לא מדפיסים את המפתח עצמו, רק רמז על הצורה שלו
+  throw new Error(`FIREBASE_SA לא תקין (אורך ${t.length}, ${em ? 'יש' : 'אין'} client_email, ${/BEGIN PRIVATE KEY/.test(t) ? 'יש' : 'אין'} private_key)`);
+}
 async function googleToken(env) {
   if (GTOK && Date.now() < GTOK_EXP - 60e3) return GTOK;
-  const sa = JSON.parse(env.FIREBASE_SA);
+  const sa = parseSA(env.FIREBASE_SA);
   const now = Math.floor(Date.now() / 1000);
   const enc = o => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o)))).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
   const head = enc({ alg: 'RS256', typ: 'JWT' });
