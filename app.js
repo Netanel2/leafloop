@@ -95,9 +95,10 @@ const isStandalone = window.matchMedia('(display-mode: standalone)').matches || 
 const cfgOk = !!(FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !/PASTE/.test(FIREBASE_CONFIG.apiKey));
 // ההתחברות עוברת דרך הכתובת של האתר עצמו (worker.js), כדי שתעבוד גם באייפון.
 const sameDomainAuth = location.protocol === 'https:' && !/(firebaseapp\.com|web\.app)$/.test(location.hostname);
-let auth = null, db = null, fbApp = null;
+let auth = null, db = null, fbApp = null, fbCfg = null;
 if (cfgOk) {
-  const app = initializeApp(sameDomainAuth ? { ...FIREBASE_CONFIG, authDomain: location.host } : FIREBASE_CONFIG);
+  fbCfg = sameDomainAuth ? { ...FIREBASE_CONFIG, authDomain: location.host } : FIREBASE_CONFIG;
+  const app = initializeApp(fbCfg);
   fbApp = app;
   auth = getAuth(app);
   db = getFirestore(app);
@@ -408,10 +409,10 @@ async function enablePush(silent) {
   try {
     const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
     if (perm !== 'granted') { if (!silent) toast('ההתראות לא אושרו. אפשר לאשר בהגדרות הדפדפן, תחת הרשאות האתר.'); lsSet('ll_push', '0'); return false; }
-    const M = await loadMessaging();
+    const { M, app: pushApp } = await loadMessaging(fbCfg);
     if (M.isSupported && !(await M.isSupported())) { if (!silent) toast('הדפדפן הזה לא תומך בהתראות.'); return false; }
     const reg = await navigator.serviceWorker.ready;
-    const token = await M.getToken(M.getMessaging(fbApp), { vapidKey: CFG.VAPID_KEY, serviceWorkerRegistration: reg });
+    const token = await M.getToken(M.getMessaging(pushApp || fbApp), { vapidKey: CFG.VAPID_KEY, serviceWorkerRegistration: reg });
     if (!token) return false;
     await setDoc(doc(db, 'users', uid(), 'private', 'push'), { tokens: arrayUnion(token), t: Date.now() }, { merge: true });
     lsSet('ll_push', '1');

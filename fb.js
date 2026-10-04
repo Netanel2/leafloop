@@ -11,8 +11,18 @@ catch (e) {
   BASE = `https://www.gstatic.com/firebasejs/${VER}/`;
   mods = await loadAll(BASE);
 }
-// התראות פוש נטענות רק כשצריך
-export const loadMessaging = () => import(BASE + 'firebase-messaging.js');
+// התראות פוש נטענות רק כשצריך.
+// אם הטעינה דרך האתר נכשלת, טוענים ישירות מ-Google עם "מופע" נפרד של Firebase רק להתראות.
+export async function loadMessaging(config) {
+  try { return { M: await import(BASE + 'firebase-messaging.js'), app: null }; }
+  catch (e) {
+    console.warn('[LeafLoop] messaging via ' + BASE + ' failed, using gstatic', e);
+    const G = `https://www.gstatic.com/firebasejs/${VER}/`;
+    const [A2, M] = await Promise.all([import(G + 'firebase-app.js'), import(G + 'firebase-messaging.js')]);
+    const app = A2.getApps().find(a => a.name === 'push') || A2.initializeApp(config, 'push');
+    return { M, app };
+  }
+}
 const [A, U, F] = mods;
 export const { initializeApp } = A;
 export const {
