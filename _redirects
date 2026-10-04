@@ -1,6 +1,0 @@
-# הגדרות ל-Netlify בלבד (Cloudflare מתעלם מהקובץ הזה).
-# כל החלקים "החכמים" עוברים לשרת הקטן שכבר קיים ב-Cloudflare, או ל-Firebase.
-/__/auth/*      https://leafloop-f882c.firebaseapp.com/__/auth/:splat      200
-/__/firebase/*  https://leafloop-f882c.firebaseapp.com/__/firebase/:splat  200
-/fb/*           https://leafloop.netanelkk9.workers.dev/fb/:splat          200
-/api/*          https://leafloop.netanelkk9.workers.dev/api/:splat         200
