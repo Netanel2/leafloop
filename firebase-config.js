@@ -11,4 +11,4 @@ export const FIREBASE_CONFIG = {
 };
 
 // מפתח להתראות פוש (Firebase > Project settings > Cloud Messaging > Web Push certificates)
-export const VAPID_KEY = "PASTE_VAPID_KEY";
+export const VAPID_KEY = "BOlZMGtqSKeoPrzzrA5TWyxgywkCnDZ8dw7tcnOvO3JPG7uTrPPjtQKlsM5RnQC9StsSiHwzgjARD9uW4MfQgok";

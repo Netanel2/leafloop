@@ -574,3 +574,18 @@ input,textarea,select{font-size:16px}
 #sheet .ask-ic ~ p.muted{text-align:center}
 .ios-steps{margin:10px 0 16px;padding-inline-start:22px;display:flex;flex-direction:column;gap:8px}
 .ios-share{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:#E8F0FE;color:#1a73e8;font-weight:700}
+
+/* ===== 📣 התראות מהמנהל ===== */
+.tpls{display:flex;gap:10px;overflow-x:auto;padding:4px 14px 8px;scrollbar-width:none}
+.tpls::-webkit-scrollbar{display:none}
+.tpl{flex:none;width:210px;text-align:start;background:var(--card);border:2px solid var(--line);border-radius:var(--r-md);padding:10px 12px;display:flex;flex-direction:column;gap:4px}
+.tpl b{font-size:14px}.tpl span{font-size:12px;color:var(--muted);line-height:1.4}
+.tpl.on{border-color:var(--hibiscus);background:#FFF0F5}
+.notif-prev{display:flex;gap:10px;align-items:flex-start;background:#F1F3F4;color:#1f1f1f;border-radius:18px;padding:12px 14px;box-shadow:0 4px 14px -8px rgba(0,0,0,.35)}
+.notif-prev .np-ic{width:34px;height:34px;border-radius:10px;background:var(--jungle);display:grid;place-items:center;flex:none}
+.notif-prev div:nth-child(2){flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+.notif-prev b{font-size:14px}.notif-prev span{font-size:13px;color:#444}
+.notif-prev em{font-style:normal;font-size:11px;color:#777}
+.bc-progress{margin-top:12px;background:var(--line);border-radius:10px;overflow:hidden;position:relative;height:28px}
+.bc-progress i{position:absolute;inset-block:0;inset-inline-start:0;width:0;background:var(--leaf);transition:width .3s}
+.bc-progress span{position:relative;display:block;text-align:center;line-height:28px;font-size:13px;font-weight:700}

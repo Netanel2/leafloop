@@ -1706,7 +1706,7 @@ const nfmt = n => (n == null ? '–' : Number(n).toLocaleString('he-IL'));
 VIEWS.admin = async function (tab) {
   if (!isAdmin()) { go('profile'); return; }
   tab = tab || 'overview';
-  const T = [['overview', '📊 סקירה'], ['users', '👥 משתמשים'], ['reports', '🚩 דיווחים'], ['nurseries', '🌿 משתלות']];
+  const T = [['overview', '📊 סקירה'], ['push', '📣 התראות'], ['users', '👥 משתמשים'], ['reports', '🚩 דיווחים'], ['nurseries', '🌿 משתלות']];
   $('#view').innerHTML = `<div class="ph"><button class="icon-btn" data-a="open" data-to="profile" aria-label="חזרה">${ic('back')}</button><h1>לוח ניהול</h1>
     <span class="sp" style="flex:1"></span><button class="icon-btn" data-a="open" data-to="admin/${tab}" aria-label="רענון">${ic('refresh', 20)}</button></div>
   <div class="tabs">${T.map(([k, l]) => `<button class="sel ${tab === k ? 'on' : ''}" data-a="open" data-to="admin/${k}">${l}</button>`).join('')}</div>
@@ -1715,6 +1715,7 @@ VIEWS.admin = async function (tab) {
   if (tab === 'nurseries') return adminNurseries(box);
   if (tab === 'users') return adminUsers(box);
   if (tab === 'reports') return adminReports(box);
+  if (tab === 'push') return adminPush(box);
   return adminOverview(box);
 };
 async function adminOverview(box) {
@@ -1790,6 +1791,99 @@ async function adminReports(box) {
   box.innerHTML = `<h2 class="section-t" style="margin-top:6px">פתוחים (${open.length})</h2>${open.map(card).join('') || '<p class="muted small" style="padding:0 18px">אין דיווחים פתוחים 🎉</p>'}
   ${done.length ? `<h2 class="section-t">טופלו (${done.length})</h2>${done.map(card).join('')}` : ''}
   <p class="small muted" style="padding:14px 18px 24px">השעיה מסתירה את כל המודעות של המשתמש/ת וחוסמת את הכניסה שלו/ה לאפליקציה. אפשר לבטל בכל רגע מלשונית המשתמשים.</p>`;
+}
+
+// ---------- 📣 התראות לכל המשתמשים ----------
+const PUSH_TEMPLATES = [
+  { t: '🌿 צמחים חדשים לידך', b: 'אנשים באזור העלו צמחים חדשים השבוע. בואו לראות מה מחכה לכם', u: '/#discover' },
+  { t: '🔥 יש צמחים שעוד לא ראית', b: 'כמה החלקות, ואולי מחכה לך התאמה מושלמת', u: '/#swipe' },
+  { t: '📸 יש לך ייחור מיותר?', b: 'תוך דקה הוא באפליקציה, ומישהו באזור כבר מחפש אותו', u: '/#add' },
+  { t: '🎁 צמחים במתנה בשכונה', b: 'אנשים לידך מוסרים צמחים בחינם. מי שמגיע ראשון…', u: '/#discover' },
+  { t: '💬 מישהו מחכה לך?', b: 'בדקו את ההתאמות והפניות שלכם. אולי מישהו כבר רוצה להחליף', u: '/#matches' },
+  { t: '🌱 שבוע ירוק!', b: 'זה זמן מצוין לסדר את המרפסת. מה תחליפו השבוע?', u: '/#discover' },
+  { t: '⭐ החלפתם לאחרונה?', b: 'דרגו את ההחלפה ועזרו לקהילה לבנות אמון', u: '/#matches' },
+  { t: '🤝 תביאו חבר', b: 'כמה שיותר שכנים, יותר התאמות. שלחו את LeafLoop לחבר שאוהב צמחים', u: '/#profile' },
+  { t: '☀️ עונת הייחורים', b: 'עכשיו זה הזמן הכי טוב לייחורים. העלו אחד ותראו מי מתעניין', u: '/#add' },
+  { t: '🌿 התגעגענו!', b: 'מאז שהיית פה הצטרפו אנשים חדשים עם צמחים חדשים. בואו להציץ', u: '/#discover' }
+];
+const PUSH_LINKS = [['/#discover', '🔍 חיפוש'], ['/#swipe', '🔥 גלה עוד'], ['/#add', '➕ הוספת צמח'], ['/#matches', '💚 התאמות'], ['/#profile', '👤 פרופיל']];
+const BC = { seg: 'all', city: '', title: PUSH_TEMPLATES[0].t, body: PUSH_TEMPLATES[0].b, url: PUSH_TEMPLATES[0].u };
+function bcTargets() {
+  const now = Date.now(), all = (S.adminAll || []).filter(u => !u.banned && okId(u.id));
+  const f = {
+    all: () => all,
+    new7: () => all.filter(u => (u.createdAt || 0) >= now - 7 * DAY),
+    idle7: () => all.filter(u => (u.lastSeen || 0) < now - 7 * DAY),
+    idle30: () => all.filter(u => (u.lastSeen || 0) < now - 30 * DAY),
+    noplant: () => all.filter(u => !(S.adminOwners || new Set()).has(u.id)),
+    city: () => all.filter(u => u.city === BC.city)
+  };
+  return (f[BC.seg] || f.all)();
+}
+function bcPreview() {
+  const el = $('#bc-preview'); if (el) el.innerHTML = `<div class="np-ic">🌿</div><div><b>${esc(BC.title || 'כותרת')}</b><span>${esc(BC.body || '')}</span></div><em>עכשיו</em>`;
+  const btn = $('#bc-send'); if (btn) btn.innerHTML = `📣 שליחה ל-${bcTargets().length} משתמשים`;
+}
+async function adminPush(box) {
+  let users = [], owners = new Set(), hist = [];
+  try {
+    const [us, ps, hs] = await Promise.all([
+      getDocs(query(collection(db, 'users'), limit(5000))),
+      getDocs(query(collection(db, 'plants'), limit(5000))),
+      getDocs(query(collection(db, 'broadcasts'), orderBy('t', 'desc'), limit(15))).catch(() => ({ docs: [] }))
+    ]);
+    users = us.docs.map(d => ({ id: d.id, ...d.data() }));
+    ps.docs.forEach(d => owners.add(d.data().ownerId));
+    hist = hs.docs.map(d => d.data());
+  } catch (e) { errLog(e); box.innerHTML = adminNoAccess(); return; }
+  S.adminAll = users; S.adminOwners = owners; S.adminHist = hist;
+  const cities = [...new Set(users.map(u => u.city).filter(Boolean))].sort();
+  if (!BC.city) BC.city = cities[0] || '';
+  const segs = [['all', 'כולם'], ['new7', 'חדשים השבוע'], ['idle7', 'לא נכנסו 7+ ימים'], ['idle30', 'לא נכנסו 30+ ימים'], ['noplant', 'עוד לא העלו צמח'], ['city', 'לפי עיר']];
+  const segCount = k => { const keep = BC.seg; BC.seg = k; const n = bcTargets().length; BC.seg = keep; return n; };
+  const last = hist[0];
+  box.innerHTML = `
+  <h2 class="section-t" style="margin-top:6px">1. למי לשלוח?</h2>
+  <div class="chips" style="padding:0 14px;gap:8px">${segs.map(([k, l]) => `<button class="sel ${BC.seg === k ? 'on' : ''}" data-a="bcSeg" data-k="${k}">${l} (${segCount(k)})</button>`).join('')}</div>
+  ${BC.seg === 'city' ? `<div class="pad" style="padding-bottom:0"><select class="field" id="bc-city" data-change="bcCity">${cities.map(c => `<option ${c === BC.city ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>` : ''}
+  <h2 class="section-t">2. מה לכתוב?</h2>
+  <p class="small muted" style="padding:0 18px;margin-top:-4px">בוחרים הודעה מוכנה, ואפשר לערוך אותה.</p>
+  <div class="tpls">${PUSH_TEMPLATES.map((t, i) => `<button class="tpl ${BC.title === t.t ? 'on' : ''}" data-a="bcTpl" data-i="${i}"><b>${esc(t.t)}</b><span>${esc(t.b)}</span></button>`).join('')}</div>
+  <div class="pad">
+    <p class="label">כותרת</p><input class="field" id="bc-title" maxlength="60" value="${esc(BC.title)}">
+    <p class="label">טקסט</p><textarea class="field" id="bc-body" rows="3" maxlength="180">${esc(BC.body)}</textarea>
+    <p class="label">לחיצה על ההתראה פותחת</p>
+    <div class="chips" style="gap:8px">${PUSH_LINKS.map(([u, l]) => `<button class="sel ${BC.url === u ? 'on' : ''}" data-a="bcLink" data-u="${u}">${l}</button>`).join('')}</div>
+    <p class="label">ככה זה ייראה בטלפון</p>
+    <div class="notif-prev" id="bc-preview"></div>
+    <div class="note" style="margin-top:14px">${ic('bell', 20)}<span>רק מי שאישר התראות יקבל אותן. באייפון, רק מי שהוסיף את האפליקציה למסך הבית. כדאי לא לשלוח יותר מפעם-פעמיים בשבוע.</span></div>
+    <div class="err" id="bc-err"></div>
+    <button class="btn ghost" data-a="bcTest" style="margin-top:14px">🧪 שליחת בדיקה אליי</button>
+    <button class="btn hot" id="bc-send" data-a="bcSend"></button>
+    <div id="bc-progress" class="bc-progress" hidden><i></i><span></span></div>
+  </div>
+  <h2 class="section-t">היסטוריה</h2>
+  ${hist.length ? `<div class="list">${hist.map(h => `<div class="li"><div class="li-main"><div class="li-t">${esc(h.title)}</div><div class="li-s">${esc(h.body || '')}</div><div class="small muted">${ago(h.t)}, ${esc(h.segLabel || '')}: ${h.targets} משתמשים, ${h.sent} מכשירים קיבלו</div></div></div>`).join('')}</div>` : '<p class="muted small" style="padding:0 18px">עוד לא נשלחו התראות.</p>'}
+  ${last && Date.now() - last.t < DAY ? `<p class="small" style="padding:10px 18px;color:#B3122F">שימו לב: כבר נשלחה התראה ב-24 השעות האחרונות.</p>` : ''}
+  <div style="height:24px"></div>`;
+  bcPreview();
+}
+async function bcRun(uids, onProgress) {
+  const tok = await auth.currentUser.getIdToken();
+  let sent = 0, devices = 0, reason = '';
+  for (let i = 0; i < uids.length; i += 20) {
+    const r = await fetch('/api/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ uids: uids.slice(i, i + 20), title: BC.title, body: BC.body, url: BC.url }) });
+    if (r.status === 403) throw new Error('forbidden');
+    const d = await r.json().catch(() => ({}));
+    sent += d.sent || 0; devices += d.devices || 0; reason = d.reason || reason;
+    onProgress(Math.min(uids.length, i + 20), uids.length, sent);
+  }
+  return { sent, devices, reason };
+}
+function bcValid() {
+  BC.title = ($('#bc-title') || {}).value?.trim() ?? BC.title; BC.body = ($('#bc-body') || {}).value?.trim() ?? BC.body;
+  if (!BC.title) { $('#bc-err').textContent = 'כתבו כותרת להתראה.'; return false; }
+  return true;
 }
 
 async function createNursery(d) {
@@ -2325,6 +2419,33 @@ const A = {
       toast(on ? 'המשתמש/ת הושעה' : 'ההשעיה בוטלה'); VIEWS.admin(curRoute()[1]);
     } catch (e) { errLog(e); busy(el, false); toast('לא הצליח. בדקו שכללי האבטחה העדכניים פורסמו.'); }
   },
+  bcSeg: el => { BC.seg = el.dataset.k; adminPush($('#admin-box')); },
+  bcTpl: el => { const t = PUSH_TEMPLATES[+el.dataset.i]; Object.assign(BC, { title: t.t, body: t.b, url: t.u }); $('#bc-title').value = t.t; $('#bc-body').value = t.b; $$('.tpl').forEach(b => b.classList.toggle('on', b === el)); $$('[data-a=bcLink]').forEach(b => b.classList.toggle('on', b.dataset.u === t.u)); bcPreview(); },
+  bcLink: el => { BC.url = el.dataset.u; $$('[data-a=bcLink]').forEach(b => b.classList.toggle('on', b === el)); },
+  bcTest: async el => {
+    if (!bcValid()) return;
+    busy(el, true, 'שולחים…');
+    try { const r = await bcRun([uid()], () => { }); toast(r.reason ? 'ההתראות עוד לא הוגדרו בשרת (FIREBASE_SA).' : r.sent ? '🧪 נשלחה התראת בדיקה לטלפון שלך' : 'לא נמצא מכשיר שלך עם התראות. הפעילו התראות בהגדרות.'); }
+    catch (e) { errLog(e); toast('השליחה לא הצליחה.'); }
+    busy(el, false);
+  },
+  bcSend: async el => {
+    if (!bcValid()) return;
+    const targets = bcTargets().map(u => u.id);
+    if (!targets.length) { $('#bc-err').textContent = 'אין משתמשים בקהל הזה.'; return; }
+    const recent = (S.adminHist || [])[0] && Date.now() - S.adminHist[0].t < DAY;
+    if (!confirm(`לשלוח את ההתראה "${BC.title}" ל-${targets.length} משתמשים?${recent ? '\n\nשימו לב: כבר נשלחה התראה ב-24 השעות האחרונות.' : ''}`)) return;
+    busy(el, true, 'שולחים…');
+    const pr = $('#bc-progress'); pr.hidden = false;
+    try {
+      const r = await bcRun(targets, (done, total, sent) => { pr.querySelector('i').style.width = Math.round(done / total * 100) + '%'; pr.querySelector('span').textContent = `${done}/${total} משתמשים, ${sent} מכשירים קיבלו`; });
+      if (r.reason) { toast('ההתראות עוד לא הוגדרו בשרת (FIREBASE_SA).'); busy(el, false); return; }
+      const segLabel = { all: 'כולם', new7: 'חדשים השבוע', idle7: 'לא נכנסו 7+ ימים', idle30: 'לא נכנסו 30+ ימים', noplant: 'בלי צמחים', city: BC.city }[BC.seg];
+      await addDoc(collection(db, 'broadcasts'), { title: BC.title, body: BC.body, url: BC.url, seg: BC.seg, segLabel, targets: targets.length, sent: r.sent, by: uid(), t: Date.now() }).catch(errLog);
+      toast(`📣 נשלח! ${r.sent} מכשירים קיבלו את ההתראה.`);
+      setTimeout(() => VIEWS.admin('push'), 1200);
+    } catch (e) { errLog(e); busy(el, false); toast(String(e.message) === 'forbidden' ? 'אין הרשאה. רק מנהל יכול לשלוח.' : 'השליחה נעצרה באמצע. נסו שוב.'); }
+  },
   adminHandled: async el => {
     try { await updateDoc(doc(db, 'reports', el.dataset.id), { handled: true }); VIEWS.admin('reports'); } catch (e) { errLog(e); toast('לא הצליח.'); }
   },
@@ -2500,6 +2621,7 @@ document.addEventListener('change', async e => {
   if (k === 'avail') updateDoc(doc(db, 'plants', el.dataset.id), { available: el.checked }).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
   if (k === 'popen') updateDoc(doc(db, 'plants', el.dataset.id), { open: el.checked }).catch(errLog);
   if (k === 'pfrozen') setFrozen(el.dataset.id, el.checked);
+  if (k === 'bcCity') { BC.city = el.value; bcPreview(); }
   if (k === 'editPrice') {
     const pl = S.myPlants.find(x => x.id === el.dataset.id); const v = Math.round(+el.value || 0);
     if (pl && v > 0 && (v !== pl.price || pl._wantSale)) {
@@ -2531,6 +2653,7 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'sq') { SQ.q = e.target.value; clearTimeout(SQ.t); SQ.t = setTimeout(renderResults, 120); return; }
+  if (e.target.id === 'bc-title' || e.target.id === 'bc-body') { BC[e.target.id === 'bc-title' ? 'title' : 'body'] = e.target.value; $$('.tpl').forEach(b => b.classList.remove('on')); bcPreview(); return; }
   const er = e.target.closest('.pad, .ob, #sheet, #view'); if (er) $$('.err', er).forEach(x => { x.textContent = ''; });
   const t = e.target;
   if (t.dataset && t.dataset.suggest) {

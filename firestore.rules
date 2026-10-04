@@ -164,6 +164,11 @@ service cloud.firestore {
       allow delete: if signed() && resource.data.from == me();
     }
 
+    // ---------- היסטוריית התראות שנשלחו (מנהל בלבד) ----------
+    match /broadcasts/{id} {
+      allow read, create: if isAdmin();
+    }
+
     // ---------- דיווחים ----------
     match /reports/{id} {
       allow create: if signed() && request.resource.data.from == me() && request.resource.data.get('handled', false) == false

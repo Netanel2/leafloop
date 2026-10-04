@@ -7,7 +7,8 @@ const PROJECT_ID = 'leafloop-f882c';
 // בדיקה שהבקשה מגיעה ממשתמש מחובר של LeafLoop (אימות ה-ID Token של Firebase)
 let JWKS = null, JWKS_AT = 0;
 function b64u(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
-async function verifyIdToken(token) {
+async function verifyIdToken(token) { const p = await verifyIdPayload(token); return p ? p.sub : null; }
+async function verifyIdPayload(token) {
   try {
     const [h, p, sig] = token.split('.');
     if (!h || !p || !sig) return null;
@@ -22,9 +23,11 @@ async function verifyIdToken(token) {
     const jwk = JWKS.find(k => k.kid === header.kid); if (!jwk) return null;
     const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
     const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64u(sig), new TextEncoder().encode(h + '.' + p));
-    return ok ? payload.sub : null;
+    return ok ? payload : null;
   } catch (e) { return null; }
 }
+// מנהלים (חייב להתאים ל-ADMIN_EMAILS באפליקציה ול-firestore.rules)
+const ADMINS = ['netanelkk9@gmail.com'];
 
 async function turnServers(env) {
   if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return [];
@@ -132,6 +135,28 @@ async function buildNotify(env, me, type, id, preview) {
   return null;
 }
 
+// שליחה המונית (מנהל בלבד): מנה של עד 20 משתמשים בכל קריאה, כדי לעמוד במגבלות של התוכנית החינמית
+async function broadcastBatch(env, uids, msg) {
+  const gt = await googleToken(env);
+  const base = `projects/${PROJECT_ID}/databases/(default)/documents`;
+  const r = await fetch(`https://firestore.googleapis.com/v1/${base}:batchGet`, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + gt, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documents: uids.map(u => `${base}/users/${u}/private/push`) })
+  });
+  const rows = r.ok ? await r.json() : [];
+  const tokens = [];
+  (Array.isArray(rows) ? rows : []).forEach(x => { if (x.found) { const t = fmap(x.found.fields || {}).tokens; if (Array.isArray(t)) tokens.push(...t.slice(-2)); } });
+  let sent = 0;
+  await Promise.all(tokens.map(async token => {
+    const s = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT_ID}/messages:send`, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + gt, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: { token, data: msg, webpush: { headers: { Urgency: 'normal', TTL: '172800' } } } })
+    }).catch(() => null);
+    if (s && s.ok) sent++;
+  }));
+  return { sent, devices: tokens.length };
+}
+
 const FB_VER = '10.12.2';
 // Firebase דרך הכתובת שלנו, כדי שחוסמים לא יחסמו את האפליקציה
 async function firebaseFile(url, ctx) {
@@ -151,6 +176,10 @@ async function firebaseFile(url, ctx) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    // קבצים פנימיים (git, הגדרות, קוד השרת) לא נגישים מבחוץ
+    if (/^\/\./.test(url.pathname) || /^\/(wrangler\.jsonc|worker\.js|README\.md|firestore\.rules|_redirects|vercel\.json)$/i.test(url.pathname)) {
+      return new Response('Not found', { status: 404 });
+    }
     if (url.pathname.startsWith('/fb/')) return firebaseFile(url, ctx);
     // דיווחי תקלות מהטלפונים של המשתמשים. מופיעים ב-Cloudflare > leafloop > Logs
     if (url.pathname === '/api/log' && request.method === 'POST') {
@@ -171,6 +200,21 @@ export default {
         const sent = await pushTo(env, n.to, n.msg);
         return new Response(JSON.stringify({ sent }), { headers: { 'Content-Type': 'application/json' } });
       } catch (e) { console.log('NOTIFY_ERROR', String(e)); return new Response(JSON.stringify({ sent: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+    }
+    if (url.pathname === '/api/broadcast' && request.method === 'POST') {
+      const auth = request.headers.get('Authorization') || '';
+      const p = auth.startsWith('Bearer ') ? await verifyIdPayload(auth.slice(7)) : null;
+      if (!p || p.email_verified !== true || !ADMINS.includes(String(p.email || '').toLowerCase())) return new Response('forbidden', { status: 403 });
+      if (!env.FIREBASE_SA) return new Response(JSON.stringify({ sent: 0, reason: 'push not configured' }), { headers: { 'Content-Type': 'application/json' } });
+      try {
+        const b = await request.json();
+        const uids = Array.isArray(b.uids) ? b.uids.filter(u => /^[A-Za-z0-9_-]{1,128}$/.test(u)).slice(0, 20) : [];
+        const title = String(b.title || '').slice(0, 60), body = String(b.body || '').slice(0, 180);
+        const link = /^\/(#[a-z]+)?$/.test(b.url || '') ? b.url : '/';
+        if (!uids.length || !title) return new Response('bad request', { status: 400 });
+        const res = await broadcastBatch(env, uids, { type: 'broadcast', title, body, url: link, tag: 'bc-' + Date.now() });
+        return new Response(JSON.stringify(res), { headers: { 'Content-Type': 'application/json' } });
+      } catch (e) { console.log('BROADCAST_ERROR', String(e)); return new Response(JSON.stringify({ sent: 0 }), { headers: { 'Content-Type': 'application/json' } }); }
     }
     if (url.pathname === '/api/turn') {
       const origin = request.headers.get('Origin');
