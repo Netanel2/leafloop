@@ -417,7 +417,19 @@ async function enablePush(silent) {
     lsSet('ll_push', '1');
     if (!silent) toast('🔔 ההתראות הופעלו! נודיע לך כשעונים לך.');
     return true;
-  } catch (e) { errLog(e); if (!silent) toast('לא הצלחנו להפעיל התראות. נסו שוב.'); return false; }
+  } catch (e) {
+    errLog(e);
+    const code = String(e && (e.code || e.name) || 'error'), msg = String(e && e.message || '').slice(0, 300);
+    try { window.__llReport && (window.__bootErrs || []).push('push: ' + code + ' ' + msg) && window.__llReport('push'); } catch (x) { }
+    if (!silent) {
+      const hint = /token-subscribe-failed|PERMISSION_DENIED|has not been used|disabled/i.test(code + msg) ? 'צריך להפעיל שירות ב-Google Cloud (ראו הודעה בצ׳אט עם Claude).'
+        : /failed-service-worker|serviceWorker/i.test(code + msg) ? 'בעיה ברישום של האפליקציה בדפדפן. נסו לסגור ולפתוח מחדש.'
+        : /unsupported|indexedDB/i.test(code + msg) ? 'הדפדפן לא תומך בהתראות (אולי מצב גלישה בסתר).' : '';
+      sheet(`<div class="ask-ic">⚠️</div><h3>ההתראות לא הופעלו</h3><p class="muted">${esc(hint || 'משהו השתבש. צלמו את המסך הזה ושלחו לנו.')}</p>
+      <pre class="err-code">${esc(code)}\n${esc(msg)}</pre><button class="btn ghost" data-a="closeSheet">סגירה</button>`);
+    }
+    return false;
+  }
 }
 // אחרי שליחת פנייה או הודעה: הזמן הכי טוב לבקש התראות
 function askPushSoon() {
@@ -453,6 +465,18 @@ function maybeInstallPrompt() {
   if (Date.now() - last < 7 * 864e5) return;
   if (!(deferredInstall || isIOS)) return;
   setTimeout(() => { if (!sheetOpen() && !$('#overlay.open') && !['chat', 'add'].includes(curRoute()[0])) { lsSet('ll_inst_no', String(Date.now())); installSheet(false); } }, 8000);
+}
+// בכניסה לאפליקציה: בקשה אחת (לא יותר מפעם ב-3 ימים) להפעיל התראות, או להתקין באייפון
+function entryPrompt() {
+  const needPush = pushCapable() && Notification.permission === 'default';
+  const last = +lsGet('ll_push_ask') || 0;
+  if (!needPush || Date.now() - last < 3 * 864e5) { maybeInstallPrompt(); return; }
+  setTimeout(() => {
+    if (sheetOpen() || $('#overlay.open') || ['chat', 'add'].includes(curRoute()[0]) || Notification.permission !== 'default') return;
+    lsSet('ll_push_ask', String(Date.now()));
+    sheet(`<div class="ask-ic">🔔</div><h3>להפעיל התראות?</h3><p class="muted">נודיע לך כשמישהו עונה, מתעניין בצמח שלך או מתקשר, גם כשהאפליקציה סגורה.</p>
+    <button class="btn hot" data-a="pushOn">כן, להפעיל</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
+  }, 3500);
 }
 window.addEventListener('appinstalled', () => { toast('🌿 LeafLoop הותקנה!'); });
 
@@ -632,7 +656,7 @@ async function startSession() {
   await Promise.race([S.matchesReady, new Promise(r => setTimeout(r, 4000))]);
   S.booted = true; markBooted();
   if (pushOn()) enablePush(true); // רענון המכשיר הרשום
-  maybeInstallPrompt();
+  entryPrompt();
   updateDoc(doc(db, 'users', uid()), { lastSeen: Date.now() }).catch(errLog);
 }
 async function loadPool(force) {

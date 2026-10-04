@@ -589,3 +589,4 @@ input,textarea,select{font-size:16px}
 .bc-progress{margin-top:12px;background:var(--line);border-radius:10px;overflow:hidden;position:relative;height:28px}
 .bc-progress i{position:absolute;inset-block:0;inset-inline-start:0;width:0;background:var(--leaf);transition:width .3s}
 .bc-progress span{position:relative;display:block;text-align:center;line-height:28px;font-size:13px;font-weight:700}
+.err-code{white-space:pre-wrap;word-break:break-all;direction:ltr;text-align:left;font-size:12px;background:var(--card);padding:10px;border-radius:12px;color:#B3122F;max-height:180px;overflow:auto}
