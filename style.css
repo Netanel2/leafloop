@@ -590,3 +590,18 @@ input,textarea,select{font-size:16px}
 .bc-progress i{position:absolute;inset-block:0;inset-inline-start:0;width:0;background:var(--leaf);transition:width .3s}
 .bc-progress span{position:relative;display:block;text-align:center;line-height:28px;font-size:13px;font-weight:700}
 .err-code{white-space:pre-wrap;word-break:break-all;direction:ltr;text-align:left;font-size:12px;background:var(--card);padding:10px;border-radius:12px;color:#B3122F;max-height:180px;overflow:auto}
+
+/* ===== חלון ההתראות היפה ===== */
+.pp-hero{position:relative;height:110px;display:grid;place-items:center;margin:4px 0 6px}
+.pp-ring{position:absolute;width:96px;height:96px;border-radius:50%;background:radial-gradient(circle,#FFE0EC 0%,#FFF1CC 60%,transparent 70%);animation:pp-pulse 1.8s ease-out infinite}
+.pp-bell{position:relative;font-size:58px;transform-origin:50% 10%;animation:pp-ring 2.2s ease-in-out infinite}
+@keyframes pp-pulse{0%{transform:scale(.85);opacity:1}100%{transform:scale(1.35);opacity:0}}
+@keyframes pp-ring{0%,60%,100%{transform:rotate(0)}10%{transform:rotate(16deg)}20%{transform:rotate(-14deg)}30%{transform:rotate(10deg)}40%{transform:rotate(-6deg)}50%{transform:rotate(3deg)}}
+#sheet .pp-title{text-align:center;font-size:26px;padding-inline-end:0}
+.pp-list{list-style:none;padding:0;margin:12px 0 18px;display:flex;flex-direction:column;gap:8px}
+.pp-list li{display:flex;align-items:center;gap:12px;background:var(--card);border-radius:14px;padding:10px 12px;font-weight:500}
+.pp-list li span{width:34px;height:34px;border-radius:11px;background:var(--bg);display:grid;place-items:center;font-size:18px;flex:none}
+.pp-cta{font-size:17px;padding:16px}
+/* מתי הועלה (מנהל בלבד) */
+.admin-age{color:#8A5A00;font-weight:700}
+.chip.admin-age{background:#FFF1CC}

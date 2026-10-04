@@ -416,7 +416,7 @@ async function enablePush(silent) {
     const token = await M.getToken(M.getMessaging(pushApp || fbApp), { vapidKey: CFG.VAPID_KEY, serviceWorkerRegistration: reg });
     if (!token) throw Object.assign(new Error('no token returned'), { code: 'no-token' });
     await setDoc(doc(db, 'users', uid(), 'private', 'push'), { tokens: arrayUnion(token), t: Date.now() }, { merge: true });
-    lsSet('ll_push', '1');
+    lsSet('ll_push', '1'); lsSet('ll_push_off', '0'); lsSet('ll_push_token', token);
     if (!silent) {
       sheet(`<div class="ask-ic">✅</div><h3>ההתראות פעילות</h3><p class="muted">מעכשיו נודיע לך בטלפון כשמישהו עונה, פונה או מתקשר, גם כשהאפליקציה סגורה.</p><button class="btn hot" data-a="closeSheet">מעולה</button>`);
     }
@@ -436,15 +436,38 @@ async function enablePush(silent) {
   }
 }
 // אחרי שליחת פנייה או הודעה: הזמן הכי טוב לבקש התראות
+// החלון היפה של "הפעלת התראות"
+// כיבוי התראות במכשיר הזה
+async function disablePush() {
+  const tok = lsGet('ll_push_token');
+  try { if (tok) await updateDoc(doc(db, 'users', uid(), 'private', 'push'), { tokens: arrayRemove(tok) }); } catch (e) { errLog(e); }
+  try { const { M, app } = await loadMessaging(fbCfg); await M.deleteToken(M.getMessaging(app || fbApp)); } catch (e) { errLog(e); }
+  try { const reg = await navigator.serviceWorker.getRegistration(); const sub = reg && await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch (e) { errLog(e); }
+  lsSet('ll_push', '0'); lsSet('ll_push_off', '1');
+}
+function pushPopup() {
+  sheet(`<div class="pp-hero"><div class="pp-ring"></div><div class="pp-bell">🔔</div></div>
+  <h3 class="pp-title">אל תפספסו אף צמח</h3>
+  <p class="muted center" style="margin-top:0">נודיע לכם בטלפון, גם כשהאפליקציה סגורה:</p>
+  <ul class="pp-list">
+    <li><span>💬</span>כשמישהו עונה לכם</li>
+    <li><span>🌿</span>כשמישהו רוצה את הצמח שלכם</li>
+    <li><span>📞</span>כשמתקשרים אליכם</li>
+    <li><span>🔥</span>כשצמח מרשימת המשאלות מופיע לידכם</li>
+  </ul>
+  <button class="btn hot pp-cta" data-a="pushOn">🔔 הפעלת התראות</button>
+  <button class="link-btn" data-a="closeSheet">אולי אחר כך</button>
+  <p class="small muted center" style="margin:6px 0 0">אפשר לכבות בכל רגע בהגדרות</p>`);
+}
+// אחרי שליחת פנייה או הודעה: הזמן הכי טוב לבקש התראות
 function askPushSoon() {
-  if (pushOn() || sheetOpen()) return;
+  if (pushOn() || sheetOpen() || lsGet('ll_push_off') === '1') return;
   const last = +lsGet('ll_push_ask') || 0;
   if (Date.now() - last < 3 * 864e5) return;
   if (iosNeedsInstall()) { lsSet('ll_push_ask', String(Date.now())); setTimeout(() => installSheet(true), 1500); return; }
   if (!pushCapable() || Notification.permission === 'denied') return;
   lsSet('ll_push_ask', String(Date.now()));
-  setTimeout(() => { if (!sheetOpen()) sheet(`<div class="ask-ic">🔔</div><h3>לדעת מיד כשעונים לך?</h3><p class="muted">נשלח התראה לטלפון כשמישהו עונה, מאשר פנייה או מתקשר, גם כשהאפליקציה סגורה.</p>
-    <button class="btn hot" data-a="pushOn">כן, להפעיל התראות</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`); }, 1500);
+  setTimeout(() => { if (!sheetOpen()) pushPopup(); }, 1500);
 }
 // חלון "התקינו את האפליקציה"
 function installSheet(forPush) {
@@ -470,17 +493,23 @@ function maybeInstallPrompt() {
   if (!(deferredInstall || isIOS)) return;
   setTimeout(() => { if (!sheetOpen() && !$('#overlay.open') && !['chat', 'add'].includes(curRoute()[0])) { lsSet('ll_inst_no', String(Date.now())); installSheet(false); } }, 8000);
 }
-// בכניסה לאפליקציה: בקשה אחת (לא יותר מפעם ב-3 ימים) להפעיל התראות, או להתקין באייפון
+// מיד אחרי ההתחברות: חלון התראות (לכל היותר פעם ביום, ולא למי שכיבה בעצמו)
 function entryPrompt() {
-  const needPush = pushCapable() && Notification.permission === 'default';
+  if (lsGet('ll_push_off') === '1') { maybeInstallPrompt(); return; }
   const last = +lsGet('ll_push_ask') || 0;
-  if (!needPush || Date.now() - last < 3 * 864e5) { maybeInstallPrompt(); return; }
+  const recently = Date.now() - last < 864e5;
+  if (iosNeedsInstall()) {
+    if (recently || inAppBrowser) { maybeInstallPrompt(); return; }
+    setTimeout(() => { if (!sheetOpen() && !$('#overlay.open')) { lsSet('ll_push_ask', String(Date.now())); installSheet(true); } }, 900);
+    return;
+  }
+  const needPush = pushCapable() && Notification.permission === 'default';
+  if (!needPush || recently) { maybeInstallPrompt(); return; }
   setTimeout(() => {
-    if (sheetOpen() || $('#overlay.open') || ['chat', 'add'].includes(curRoute()[0]) || Notification.permission !== 'default') return;
+    if (sheetOpen() || $('#overlay.open') || Notification.permission !== 'default') return;
     lsSet('ll_push_ask', String(Date.now()));
-    sheet(`<div class="ask-ic">🔔</div><h3>להפעיל התראות?</h3><p class="muted">נודיע לך כשמישהו עונה, מתעניין בצמח שלך או מתקשר, גם כשהאפליקציה סגורה.</p>
-    <button class="btn hot" data-a="pushOn">כן, להפעיל</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`);
-  }, 3500);
+    pushPopup();
+  }, 900);
 }
 window.addEventListener('appinstalled', () => { toast('🌿 LeafLoop הותקנה!'); });
 
@@ -826,10 +855,12 @@ function searchList(radius) {
     return (dist(a) - dist(b)) || ((b.t || 0) - (a.t || 0));
   });
 }
+// מתי הצמח הועלה: מוצג רק למנהל
+const adminAge = p => (isAdmin() && p && p.t ? `🕒 ${ago(p.t)}` : '');
 function resultCard(p) {
   const u = owner(p);
   return `<button class="rcard" data-a="open" data-to="plant/${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div>
-    <div class="mt">${esc(pName(p))}<div class="ms">${esc(u.name || p.ownerName || '')}, ${fmtKm(dist(p))}</div></div></button>`;
+    <div class="mt">${esc(pName(p))}<div class="ms">${esc(u.name || p.ownerName || '')}, ${fmtKm(dist(p))}</div>${adminAge(p) ? `<div class="ms admin-age">${adminAge(p)}</div>` : ''}</div></button>`;
 }
 function promoResult(pr) {
   return `<button class="rcard promo-r" data-a="promo" data-id="${pr.id}"><div class="mv">${promoVisual(pr)}<span class="mode m-nursery">🌿 משתלה</span></div>
@@ -886,7 +917,7 @@ const modeTag = p => {
 };
 const modeMatch = (p, want) => want === 'all' || modeOf(p) === want || (modeOf(p) === 'both' && (want === 'swap' || want === 'gift'));
 function miniCard(p) {
-  return `<button class="mini" data-a="open" data-to="plant/${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${esc(p.ownerName)}, ${fmtKm(dist(p))}</div></div></button>`;
+  return `<button class="mini" data-a="open" data-to="plant/${p.id}"><div class="mv">${visual(p)}${modeTag(p)}</div><div class="mt">${esc(pName(p))}<div class="ms">${esc(p.ownerName)}, ${fmtKm(dist(p))}</div>${adminAge(p) ? `<div class="ms admin-age">${adminAge(p)}</div>` : ''}</div></button>`;
 }
 function wantsChips(u, open) {
   const mineCats = myAvail().map(p => p.catId);
@@ -903,7 +934,7 @@ function cardHTML(it, i) {
     <div class="card-info">
       <div class="row sb"><h2>${esc(pName(p))}</h2><button class="icon-btn" data-a="open" data-to="plant/${p.id}" aria-label="פרטים נוספים">${ic('eye')}</button></div>
       ${catById(p.catId).sci ? `<p class="sci">${esc(catById(p.catId).sci)}</p>` : ''}
-      <div class="chips"><span class="chip">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}</span><span class="chip">${ic('pin', 14)}${fmtKm(dist(p))}</span><span class="chip">${esc(u.name)} ${rating(u)}</span></div>
+      <div class="chips"><span class="chip">${OFFER[p.offer]}${p.qty > 1 ? ' ×' + p.qty : ''}</span><span class="chip">${ic('pin', 14)}${fmtKm(dist(p))}</span><span class="chip">${esc(u.name)} ${rating(u)}</span>${adminAge(p) ? `<span class="chip admin-age">${adminAge(p)}</span>` : ''}</div>
       ${gift ? `<p class="wants-l">${esc(u.name)} מוסר/ת את זה בלי תמורה 💛</p><div class="chips"><span class="chip open">רק לבקש</span></div>`
         : `<p class="wants-l">${modeOf(p) === 'both' ? 'אפשר במתנה, או בתמורה ל:' : 'רוצה בתמורה'}</p><div class="chips">${wantsChips(u, p.open)}</div>`}
     </div></article>`;
@@ -1177,6 +1208,7 @@ VIEWS.plant = async function (id) {
   <div class="detail-v">${visual(p)}<button class="icon-btn back" data-a="back" aria-label="חזרה">${ic('back')}</button>${mine ? '' : `<span class="badge b-${t}" style="top:auto;bottom:18px">${TYPE_LABEL[t]}</span>`}</div>
   <div class="pad">
     <h1 style="font-size:32px;font-weight:900">${esc(pName(p))}</h1><p class="sci" style="font-size:15px">${esc(catById(p.catId).sci)}</p>
+    ${isAdmin() && p.t ? `<p class="admin-age small">🕒 הועלה ${ago(p.t)}, ${new Date(p.t).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', year: '2-digit', hour: '2-digit', minute: '2-digit' })} (רק את/ה רואה את זה)</p>` : ''}
     ${p.frozen ? `<div class="mode-big m-frozen">🔒 המודעה מוקפאת<span>${mine ? 'אחרים לא רואים אותה ולא יכולים לפנות עליה' : 'הצמח שמור כרגע למישהו'}</span></div>`
       : `<div class="mode-big ${MODE[modeOf(p)].c}">${MODE[modeOf(p)].i} ${modeOf(p) === 'sale' && p.price ? `למכירה, ${priceTxt(p)}` : MODE[modeOf(p)].t}<span>${MODE_HINT[modeOf(p)]}</span></div>`}
     <div class="facts"><div class="fact"><b>${OFFER[p.offer]}</b><span>מה מוצע</span></div><div class="fact"><b>${COND[p.condition] || ''}</b><span>מצב</span></div><div class="fact"><b>${p.qty || 1}</b><span>כמות</span></div></div>
@@ -1530,8 +1562,9 @@ function settingsSheet() {
   <div class="err" id="set-err"></div>
   <button class="btn primary" data-a="saveSettings" style="margin-top:14px">שמירה</button>
   <p class="label">התראות</p>
-  ${pushOn() ? `<div class="rate-row"><b>🔔 ההתראות פעילות</b><span class="small muted">במכשיר הזה</span></div>`
-    : `<button class="btn sun" data-a="pushOn">🔔 הפעלת התראות</button>${iosNeedsInstall() ? '<p class="small muted">באייפון צריך קודם להוסיף את האפליקציה למסך הבית.</p>' : ''}`}
+  ${pushCapable()
+    ? `<label class="toggle"><span><b>${pushOn() ? '🔔' : '🔕'} התראות לטלפון</b><br><span class="small muted">${pushOn() ? 'פעילות במכשיר הזה' : Notification.permission === 'denied' ? 'חסומות בדפדפן. כדי לאפשר: נעילה ליד הכתובת ← הרשאות ← התראות ← אפשר' : 'כבויות'}</span></span><input type="checkbox" data-change="pushToggle" ${pushOn() ? 'checked' : ''} ${Notification.permission === 'denied' ? 'disabled' : ''}></label>`
+    : iosNeedsInstall() ? `<button class="btn sun" data-a="pushOn">🔔 הפעלת התראות</button><p class="small muted">באייפון צריך קודם להוסיף את האפליקציה למסך הבית.</p>` : ''}
   ${deferredInstall ? `<button class="btn sun" data-a="install">${ic('download')} התקנת האפליקציה בטלפון</button>` : ''}
   ${isIOS && !isStandalone ? `<div class="note" style="margin-top:14px">${ic('download', 20)}<span><b>להתקנה באייפון:</b> בספארי לוחצים על סמל השיתוף ואז "הוספה למסך הבית".</span></div>` : ''}
   ${(S.priv.blocked || []).length ? `<p class="label">משתמשים חסומים</p>${S.priv.blocked.map(id => { const m = S.matches.find(x => x.users.includes(id)); const nm = (m && m.info && m.info[id] && m.info[id].name) || (S.users[id] && S.users[id].name) || 'משתמש/ת'; return `<div class="rate-row"><b>${esc(nm)}</b><button class="btn ghost sm" data-a="unblock" data-id="${esc(id)}">ביטול חסימה</button></div>`; }).join('')}` : ''}
@@ -2657,6 +2690,11 @@ document.addEventListener('change', async e => {
   if (k === 'avail') updateDoc(doc(db, 'plants', el.dataset.id), { available: el.checked }).catch(e2 => { errLog(e2); toast('העדכון לא הצליח.'); });
   if (k === 'popen') updateDoc(doc(db, 'plants', el.dataset.id), { open: el.checked }).catch(errLog);
   if (k === 'pfrozen') setFrozen(el.dataset.id, el.checked);
+  if (k === 'pushToggle') {
+    el.disabled = true;
+    if (el.checked) { const ok = await enablePush(false); if (!ok) { el.checked = false; el.disabled = false; } }
+    else { await disablePush(); toast('🔕 ההתראות כובו. אפשר להפעיל שוב בכל רגע.'); settingsSheet(); }
+  }
   if (k === 'bcCity') { BC.city = el.value; bcPreview(); }
   if (k === 'editPrice') {
     const pl = S.myPlants.find(x => x.id === el.dataset.id); const v = Math.round(+el.value || 0);
