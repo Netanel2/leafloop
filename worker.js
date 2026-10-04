@@ -2,6 +2,7 @@
 // 1. מעביר את דפי ההתחברות של Google/Firebase דרך הכתובת של האתר (בשביל אייפון).
 // 2. נותן לאפליקציה פרטי "ממסר" (TURN) לשיחות קוליות, כדי שיתחברו גם בסלולר.
 const FIREBASE_HOST = 'leafloop-f882c.firebaseapp.com';
+const WORKER_VERSION = '28';
 const PROJECT_ID = 'leafloop-f882c';
 
 // בדיקה שהבקשה מגיעה ממשתמש מחובר של LeafLoop (אימות ה-ID Token של Firebase)
@@ -92,7 +93,7 @@ async function googleToken(env) {
         diag = ok ? `החתימה תואמת למפתח של Google. שעון השרת: ${new Date().toISOString()}` : 'המפתח הפרטי ב-Cloudflare לא תואם למפתח הזה ב-Google (ההדבקה השתבשה או ערבוב בין קבצים)';
       }
     } catch (e) { diag = 'אבחון נכשל: ' + String(e).slice(0, 80); }
-    throw new Error('google token failed: ' + JSON.stringify(d).slice(0, 120) + ` | key id: ${String(sa.private_key_id || '?').slice(0, 8)}… | ${diag}`);
+    throw new Error(`[v${WORKER_VERSION}] ${diag} | key ${String(sa.private_key_id || '?').slice(0, 8)} | google: ${String(d.error_description || d.error || '').slice(0, 60)}`);
   }
   GTOK = d.access_token; GTOK_EXP = Date.now() + (d.expires_in || 3600) * 1000;
   return GTOK;
@@ -207,6 +208,8 @@ async function firebaseFile(url, ctx) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    // איזו גרסה של השרת רצה עכשיו (לבדיקה)
+    if (url.pathname === '/api/version') return new Response(JSON.stringify({ worker: WORKER_VERSION, push: !!env.FIREBASE_SA }), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
     // קבצים פנימיים (git, הגדרות, קוד השרת) לא נגישים מבחוץ
     if (/^\/\./.test(url.pathname) || /^\/(wrangler\.jsonc|worker\.js|README\.md|firestore\.rules|_redirects|vercel\.json)$/i.test(url.pathname)) {
       return new Response('Not found', { status: 404 });
@@ -245,7 +248,7 @@ export default {
         if (!uids.length || !title) return new Response('bad request', { status: 400 });
         const res = await broadcastBatch(env, uids, { type: 'broadcast', title, body, url: link, tag: 'bc-' + Date.now() });
         return new Response(JSON.stringify(res), { headers: { 'Content-Type': 'application/json' } });
-      } catch (e) { console.log('BROADCAST_ERROR', String(e)); return new Response(JSON.stringify({ sent: 0, err: String(e && e.message || e).slice(0, 200) }), { headers: { 'Content-Type': 'application/json' } }); }
+      } catch (e) { console.log('BROADCAST_ERROR', String(e)); return new Response(JSON.stringify({ sent: 0, err: String(e && e.message || e).slice(0, 400) }), { headers: { 'Content-Type': 'application/json' } }); }
     }
     if (url.pathname === '/api/turn') {
       const origin = request.headers.get('Origin');
