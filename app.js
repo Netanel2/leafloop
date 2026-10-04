@@ -522,6 +522,7 @@ function go(h) { if (location.hash === '#' + h) route(); else location.hash = h;
 const VIEWS = {};
 function route() {
   closeSheet();
+  $('#overlay').classList.remove('open'); // מסך "יש התאמה" נסגר כשעוברים מסך (גם בכפתור "חזרה")
   if (chatUnsub) { chatUnsub(); chatUnsub = null; }
   if (mapObj) { mapObj.remove(); mapObj = null; }
   if (REC) stopRec(true);
