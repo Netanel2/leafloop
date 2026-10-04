@@ -78,7 +78,22 @@ async function googleToken(env) {
   const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + jwt });
   const d = await r.json();
   // מזהה המפתח והמייל אינם סודיים, והם עוזרים לוודא שהמפתח ב-Cloudflare הוא המפתח הפעיל ב-Google
-  if (!d.access_token) throw new Error('google token failed: ' + JSON.stringify(d).slice(0, 150) + ` | key id: ${String(sa.private_key_id || '?').slice(0, 8)}… | ${sa.client_email || '?'}`);
+  if (!d.access_token) {
+    // אבחון: משווים את החתימה שלנו למפתח הציבורי ש-Google מפרסם עבור אותו מפתח
+    let diag = '';
+    try {
+      const jr = await fetch('https://www.googleapis.com/service_accounts/v1/jwk/' + encodeURIComponent(sa.client_email));
+      const keys = (await jr.json()).keys || [];
+      const pub = keys.find(k => k.kid === sa.private_key_id);
+      if (!pub) diag = `Google עוד לא מפרסם את המפתח הזה (${keys.length} מפתחות פעילים: ${keys.map(k => String(k.kid).slice(0, 8)).join(', ')})`;
+      else {
+        const pk = await crypto.subtle.importKey('jwk', { kty: pub.kty, n: pub.n, e: pub.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+        const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', pk, sig, new TextEncoder().encode(head + '.' + body));
+        diag = ok ? `החתימה תואמת למפתח של Google. שעון השרת: ${new Date().toISOString()}` : 'המפתח הפרטי ב-Cloudflare לא תואם למפתח הזה ב-Google (ההדבקה השתבשה או ערבוב בין קבצים)';
+      }
+    } catch (e) { diag = 'אבחון נכשל: ' + String(e).slice(0, 80); }
+    throw new Error('google token failed: ' + JSON.stringify(d).slice(0, 120) + ` | key id: ${String(sa.private_key_id || '?').slice(0, 8)}… | ${diag}`);
+  }
   GTOK = d.access_token; GTOK_EXP = Date.now() + (d.expires_in || 3600) * 1000;
   return GTOK;
 }
