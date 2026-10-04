@@ -411,12 +411,15 @@ async function enablePush(silent) {
     if (perm !== 'granted') { if (!silent) toast('ההתראות לא אושרו. אפשר לאשר בהגדרות הדפדפן, תחת הרשאות האתר.'); lsSet('ll_push', '0'); return false; }
     const { M, app: pushApp } = await loadMessaging(fbCfg);
     if (M.isSupported && !(await M.isSupported())) { if (!silent) toast('הדפדפן הזה לא תומך בהתראות.'); return false; }
-    const reg = await navigator.serviceWorker.ready;
+    if (!(await navigator.serviceWorker.getRegistration())) await navigator.serviceWorker.register('sw.js');
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('service worker not ready'), { code: 'sw-timeout' })), 12000))]);
     const token = await M.getToken(M.getMessaging(pushApp || fbApp), { vapidKey: CFG.VAPID_KEY, serviceWorkerRegistration: reg });
-    if (!token) return false;
+    if (!token) throw Object.assign(new Error('no token returned'), { code: 'no-token' });
     await setDoc(doc(db, 'users', uid(), 'private', 'push'), { tokens: arrayUnion(token), t: Date.now() }, { merge: true });
     lsSet('ll_push', '1');
-    if (!silent) toast('🔔 ההתראות הופעלו! נודיע לך כשעונים לך.');
+    if (!silent) {
+      sheet(`<div class="ask-ic">✅</div><h3>ההתראות פעילות</h3><p class="muted">מעכשיו נודיע לך בטלפון כשמישהו עונה, פונה או מתקשר, גם כשהאפליקציה סגורה.</p><button class="btn hot" data-a="closeSheet">מעולה</button>`);
+    }
     return true;
   } catch (e) {
     errLog(e);
@@ -1895,15 +1898,15 @@ async function adminPush(box) {
 }
 async function bcRun(uids, onProgress) {
   const tok = await auth.currentUser.getIdToken();
-  let sent = 0, devices = 0, reason = '';
+  let sent = 0, devices = 0, reason = '', err = '';
   for (let i = 0; i < uids.length; i += 20) {
     const r = await fetch('/api/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ uids: uids.slice(i, i + 20), title: BC.title, body: BC.body, url: BC.url }) });
     if (r.status === 403) throw new Error('forbidden');
     const d = await r.json().catch(() => ({}));
-    sent += d.sent || 0; devices += d.devices || 0; reason = d.reason || reason;
+    sent += d.sent || 0; devices += d.devices || 0; reason = d.reason || reason; err = d.err || err;
     onProgress(Math.min(uids.length, i + 20), uids.length, sent);
   }
-  return { sent, devices, reason };
+  return { sent, devices, reason, err };
 }
 function bcValid() {
   BC.title = ($('#bc-title') || {}).value?.trim() ?? BC.title; BC.body = ($('#bc-body') || {}).value?.trim() ?? BC.body;
@@ -2450,7 +2453,15 @@ const A = {
   bcTest: async el => {
     if (!bcValid()) return;
     busy(el, true, 'שולחים…');
-    try { const r = await bcRun([uid()], () => { }); toast(r.reason ? 'ההתראות עוד לא הוגדרו בשרת (FIREBASE_SA).' : r.sent ? '🧪 נשלחה התראת בדיקה לטלפון שלך' : 'לא נמצא מכשיר שלך עם התראות. הפעילו התראות בהגדרות.'); }
+    try {
+      const r = await bcRun([uid()], () => { });
+      const msg = r.reason ? 'ההתראות עוד לא הוגדרו בשרת (FIREBASE_SA חסר ב-Runtime variables).'
+        : r.sent ? `🧪 נשלחה התראת בדיקה ל-${r.sent} ${r.sent === 1 ? 'מכשיר' : 'מכשירים'}.`
+        : r.devices ? 'נמצא מכשיר, אבל השליחה אליו נכשלה.'
+        : r.err ? 'השרת לא הצליח לקרוא את רשימת המכשירים.'
+        : 'לא נמצא מכשיר שלך שאישר התראות. בטלפון: הגדרות ← הפעלת התראות.';
+      sheet(`<div class="ask-ic">${r.sent ? '✅' : '🔎'}</div><h3>תוצאת הבדיקה</h3><p class="muted">${esc(msg)}</p>${r.err ? `<pre class="err-code">${esc(r.err)}</pre>` : ''}<button class="btn ghost" data-a="closeSheet">סגירה</button>`);
+    }
     catch (e) { errLog(e); toast('השליחה לא הצליחה.'); }
     busy(el, false);
   },

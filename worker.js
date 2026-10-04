@@ -63,7 +63,7 @@ async function googleToken(env) {
   const jwt = head + '.' + body + '.' + btoa(bin).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
   const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + jwt });
   const d = await r.json();
-  if (!d.access_token) throw new Error('google token failed');
+  if (!d.access_token) throw new Error('google token failed: ' + JSON.stringify(d).slice(0, 150));
   GTOK = d.access_token; GTOK_EXP = Date.now() + (d.expires_in || 3600) * 1000;
   return GTOK;
 }
@@ -143,18 +143,19 @@ async function broadcastBatch(env, uids, msg) {
     method: 'POST', headers: { Authorization: 'Bearer ' + gt, 'Content-Type': 'application/json' },
     body: JSON.stringify({ documents: uids.map(u => `${base}/users/${u}/private/push`) })
   });
-  const rows = r.ok ? await r.json() : [];
+  if (!r.ok) return { sent: 0, devices: 0, err: 'firestore ' + r.status + ': ' + (await r.text()).slice(0, 200) };
+  const rows = await r.json();
   const tokens = [];
   (Array.isArray(rows) ? rows : []).forEach(x => { if (x.found) { const t = fmap(x.found.fields || {}).tokens; if (Array.isArray(t)) tokens.push(...t.slice(-2)); } });
-  let sent = 0;
+  let sent = 0, err = '';
   await Promise.all(tokens.map(async token => {
     const s = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT_ID}/messages:send`, {
       method: 'POST', headers: { Authorization: 'Bearer ' + gt, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { token, data: msg, webpush: { headers: { Urgency: 'normal', TTL: '172800' } } } })
-    }).catch(() => null);
-    if (s && s.ok) sent++;
+    }).catch(e => ({ ok: false, status: 0, text: async () => String(e) }));
+    if (s.ok) sent++; else if (!err) err = 'fcm ' + s.status + ': ' + (await s.text()).slice(0, 200);
   }));
-  return { sent, devices: tokens.length };
+  return { sent, devices: tokens.length, err };
 }
 
 const FB_VER = '10.12.2';
@@ -214,7 +215,7 @@ export default {
         if (!uids.length || !title) return new Response('bad request', { status: 400 });
         const res = await broadcastBatch(env, uids, { type: 'broadcast', title, body, url: link, tag: 'bc-' + Date.now() });
         return new Response(JSON.stringify(res), { headers: { 'Content-Type': 'application/json' } });
-      } catch (e) { console.log('BROADCAST_ERROR', String(e)); return new Response(JSON.stringify({ sent: 0 }), { headers: { 'Content-Type': 'application/json' } }); }
+      } catch (e) { console.log('BROADCAST_ERROR', String(e)); return new Response(JSON.stringify({ sent: 0, err: String(e && e.message || e).slice(0, 200) }), { headers: { 'Content-Type': 'application/json' } }); }
     }
     if (url.pathname === '/api/turn') {
       const origin = request.headers.get('Origin');
