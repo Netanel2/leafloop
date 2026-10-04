@@ -67,7 +67,7 @@ async function googleToken(env) {
   const sa = parseSA(env.FIREBASE_SA);
   const now = Math.floor(Date.now() / 1000);
   const enc = o => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o)))).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const head = enc({ alg: 'RS256', typ: 'JWT' });
+  const head = enc(sa.private_key_id ? { alg: 'RS256', typ: 'JWT', kid: sa.private_key_id } : { alg: 'RS256', typ: 'JWT' });
   const body = enc({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 });
   const pem = sa.private_key.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
   const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0));
