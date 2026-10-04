@@ -161,7 +161,7 @@ const FB_VER = '10.12.2';
 // Firebase דרך הכתובת שלנו, כדי שחוסמים לא יחסמו את האפליקציה
 async function firebaseFile(url, ctx) {
   const file = url.pathname.slice(4);
-  if (!/^firebase-(app|auth|firestore)\.js$/.test(file)) return new Response('not found', { status: 404 });
+  if (!/^firebase-(app|auth|firestore|messaging)\.js$/.test(file)) return new Response('not found', { status: 404 });
   const cache = caches.default, key = new Request(url.origin + '/fb/' + FB_VER + '/' + file);
   let res = await cache.match(key);
   if (res) return res;
