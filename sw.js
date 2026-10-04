@@ -1,6 +1,6 @@
 // Service worker: מאפשר התקנה כאפליקציה ופתיחה מהירה.
 // בכל עדכון גדול אפשר להעלות את המספר כדי לרענן את הקבצים השמורים.
-const V = 'leafloop-v24';
+const V = 'leafloop-v25';
 const SHELL = ['./', 'index.html', 'boot.js', 'style.css', 'app.js', 'art.js', 'data.js', 'fb.js', 'firebase-config.js', 'icon.svg', 'icon-192.png', 'manifest.webmanifest'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).catch(() => {})); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -17,7 +17,7 @@ self.addEventListener('push', e => {
   try { const j = e.data ? e.data.json() : {}; d = j.data || j.notification || j; } catch (x) { d = { body: e.data ? e.data.text() : '' }; }
   const call = d.type === 'call';
   e.waitUntil(self.registration.showNotification(d.title || 'LeafLoop', {
-    body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', dir: 'rtl', lang: 'he',
+    body: d.body || '', icon: new URL('icon-192.png', self.registration.scope).href, badge: new URL('badge-96.png', self.registration.scope).href, dir: 'rtl', lang: 'he',
     tag: d.tag || undefined, renotify: !!d.tag, requireInteraction: call,
     vibrate: call ? [500, 250, 500, 250, 500] : [120, 60, 120],
     data: { url: d.url || './' }
