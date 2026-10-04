@@ -77,7 +77,8 @@ async function googleToken(env) {
   const jwt = head + '.' + body + '.' + btoa(bin).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
   const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + jwt });
   const d = await r.json();
-  if (!d.access_token) throw new Error('google token failed: ' + JSON.stringify(d).slice(0, 150));
+  // מזהה המפתח והמייל אינם סודיים, והם עוזרים לוודא שהמפתח ב-Cloudflare הוא המפתח הפעיל ב-Google
+  if (!d.access_token) throw new Error('google token failed: ' + JSON.stringify(d).slice(0, 150) + ` | key id: ${String(sa.private_key_id || '?').slice(0, 8)}… | ${sa.client_email || '?'}`);
   GTOK = d.access_token; GTOK_EXP = Date.now() + (d.expires_in || 3600) * 1000;
   return GTOK;
 }
