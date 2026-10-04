@@ -553,3 +553,24 @@ input,textarea,select{font-size:16px}
 .boot-fail p{color:var(--muted);margin:0 0 6px}
 .boot-fail details{margin-top:12px;text-align:start;font-size:12px;color:var(--muted)}
 .boot-fail pre{white-space:pre-wrap;word-break:break-all;direction:ltr;text-align:left;background:var(--card);padding:10px;border-radius:12px}
+
+/* ===== הוספת צמח בשלבים ===== */
+.wiz-h{padding-bottom:4px}
+.wiz-h h1{flex:1}
+.wiz-n{font-family:var(--font-d);font-weight:700;color:var(--muted);font-size:15px}
+.wiz-bar{height:6px;margin:0 18px;border-radius:3px;background:var(--line);overflow:hidden}
+.wiz-bar i{display:block;height:100%;background:var(--hibiscus);border-radius:3px;transition:width .25s}
+.wiz-sum{display:flex;align-items:center;gap:10px;margin:12px 18px 0;padding:8px 10px;background:var(--card);border-radius:var(--r-md)}
+.wiz-sum .thumb{width:40px;height:40px;border-radius:12px}
+.wiz-sum b{flex:1}
+.wiz-body{padding-top:14px}
+.wiz-q{font-size:24px;font-weight:900;margin-bottom:6px}
+.field.wiz-big{font-size:20px;padding:15px 16px}
+.link-btn{display:block;margin:16px auto 0;color:var(--muted);text-decoration:underline;font-size:14px}
+.wiz-foot{padding:6px 18px 24px}
+/* חלונות התראות והתקנה */
+.ask-ic{font-size:44px;text-align:center;margin-bottom:4px}
+#sheet .ask-ic + h3{text-align:center;padding-inline-end:0}
+#sheet .ask-ic ~ p.muted{text-align:center}
+.ios-steps{margin:10px 0 16px;padding-inline-start:22px;display:flex;flex-direction:column;gap:8px}
+.ios-share{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:#E8F0FE;color:#1a73e8;font-weight:700}

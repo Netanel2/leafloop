@@ -9,3 +9,6 @@ export const FIREBASE_CONFIG = {
   appId: "1:690402866249:web:356443f2876c84795afb98",
   measurementId: "G-Y19SV7RKTM"
 };
+
+// מפתח להתראות פוש (Firebase > Project settings > Cloud Messaging > Web Push certificates)
+export const VAPID_KEY = "PASTE_VAPID_KEY";

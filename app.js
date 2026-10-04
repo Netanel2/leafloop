@@ -3,9 +3,10 @@ import {
   initializeApp, getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
   onAuthStateChanged, signOut, deleteUser, reauthenticateWithPopup,
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, addDoc, collection, query, where,
-  getDocs, onSnapshot, orderBy, limit, increment, arrayUnion, arrayRemove, writeBatch, getCountFromServer
+  getDocs, onSnapshot, orderBy, limit, increment, arrayUnion, arrayRemove, writeBatch, getCountFromServer, loadMessaging
 } from './fb.js';
-import { FIREBASE_CONFIG } from './firebase-config.js';
+import * as CFG from './firebase-config.js';
+const FIREBASE_CONFIG = CFG.FIREBASE_CONFIG;
 
 const APP_NAME = 'LeafLoop';
 const $ = (s, r = document) => r.querySelector(s);
@@ -94,9 +95,10 @@ const isStandalone = window.matchMedia('(display-mode: standalone)').matches || 
 const cfgOk = !!(FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && !/PASTE/.test(FIREBASE_CONFIG.apiKey));
 // ההתחברות עוברת דרך הכתובת של האתר עצמו (worker.js), כדי שתעבוד גם באייפון.
 const sameDomainAuth = location.protocol === 'https:' && !/(firebaseapp\.com|web\.app)$/.test(location.hostname);
-let auth = null, db = null;
+let auth = null, db = null, fbApp = null;
 if (cfgOk) {
   const app = initializeApp(sameDomainAuth ? { ...FIREBASE_CONFIG, authDomain: location.host } : FIREBASE_CONFIG);
+  fbApp = app;
   auth = getAuth(app);
   db = getFirestore(app);
 }
@@ -386,6 +388,74 @@ function nurseryCard(n) {
   return `<button class="mini nursery-mini" data-a="open" data-to="nursery/${n.id}"><div class="mv">${nurseryImg(n)}</div><div class="mt">${esc(n.name)}<div class="ms">${fmtKm(dist(n))}${cnt ? `, ${cnt} הצעות` : ''}</div></div></button>`;
 }
 
+// ---------- התראות פוש ----------
+const pushConfigured = () => !!(CFG.VAPID_KEY && !/PASTE/.test(CFG.VAPID_KEY));
+const pushCapable = () => pushConfigured() && location.protocol === 'https:' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const pushOn = () => pushCapable() && Notification.permission === 'granted' && lsGet('ll_push') === '1';
+const iosNeedsInstall = () => isIOS && !isStandalone;
+async function pushNotify(type, id, preview) {
+  try {
+    if (!auth || !auth.currentUser) return;
+    const tok = await auth.currentUser.getIdToken();
+    fetch('/api/notify', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: JSON.stringify({ type, id, preview: String(preview || '').slice(0, 120) }) }).catch(() => { });
+  } catch (e) { }
+}
+async function enablePush(silent) {
+  if (!pushCapable()) {
+    if (!silent) { if (iosNeedsInstall()) installSheet(true); else toast(pushConfigured() ? 'הדפדפן הזה לא תומך בהתראות. נסו בכרום.' : 'ההתראות עוד לא הוגדרו באפליקציה.'); }
+    return false;
+  }
+  try {
+    const perm = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (perm !== 'granted') { if (!silent) toast('ההתראות לא אושרו. אפשר לאשר בהגדרות הדפדפן, תחת הרשאות האתר.'); lsSet('ll_push', '0'); return false; }
+    const M = await loadMessaging();
+    if (M.isSupported && !(await M.isSupported())) { if (!silent) toast('הדפדפן הזה לא תומך בהתראות.'); return false; }
+    const reg = await navigator.serviceWorker.ready;
+    const token = await M.getToken(M.getMessaging(fbApp), { vapidKey: CFG.VAPID_KEY, serviceWorkerRegistration: reg });
+    if (!token) return false;
+    await setDoc(doc(db, 'users', uid(), 'private', 'push'), { tokens: arrayUnion(token), t: Date.now() }, { merge: true });
+    lsSet('ll_push', '1');
+    if (!silent) toast('🔔 ההתראות הופעלו! נודיע לך כשעונים לך.');
+    return true;
+  } catch (e) { errLog(e); if (!silent) toast('לא הצלחנו להפעיל התראות. נסו שוב.'); return false; }
+}
+// אחרי שליחת פנייה או הודעה: הזמן הכי טוב לבקש התראות
+function askPushSoon() {
+  if (pushOn() || sheetOpen()) return;
+  const last = +lsGet('ll_push_ask') || 0;
+  if (Date.now() - last < 3 * 864e5) return;
+  if (iosNeedsInstall()) { lsSet('ll_push_ask', String(Date.now())); setTimeout(() => installSheet(true), 1500); return; }
+  if (!pushCapable() || Notification.permission === 'denied') return;
+  lsSet('ll_push_ask', String(Date.now()));
+  setTimeout(() => { if (!sheetOpen()) sheet(`<div class="ask-ic">🔔</div><h3>לדעת מיד כשעונים לך?</h3><p class="muted">נשלח התראה לטלפון כשמישהו עונה, מאשר פנייה או מתקשר, גם כשהאפליקציה סגורה.</p>
+    <button class="btn hot" data-a="pushOn">כן, להפעיל התראות</button><button class="btn ghost" data-a="closeSheet">לא עכשיו</button>`); }, 1500);
+}
+// חלון "התקינו את האפליקציה"
+function installSheet(forPush) {
+  if (isStandalone) return;
+  if (iosNeedsInstall()) {
+    sheet(`<div class="ask-ic">📲</div><h3>${forPush ? 'כדי לקבל התראות באייפון' : 'התקינו את LeafLoop'}</h3>
+    <p class="muted">${forPush ? 'באייפון, התראות עובדות רק אחרי שמוסיפים את האפליקציה למסך הבית. זה לוקח 5 שניות:' : 'פתיחה מהירה מהמסך הראשי, כמו אפליקציה רגילה, וגם התראות:'}</p>
+    <ol class="ios-steps"><li>לוחצים על כפתור השיתוף <span class="ios-share">⬆︎</span> בתחתית ספארי</li><li>גוללים ובוחרים <b>"הוספה למסך הבית"</b></li><li>פותחים את LeafLoop מהמסך הראשי ומאשרים התראות</li></ol>
+    <button class="btn ghost" data-a="installLater">הבנתי</button>`);
+    return;
+  }
+  if (deferredInstall) {
+    sheet(`<div class="ask-ic">📲</div><h3>התקינו את LeafLoop</h3><p class="muted">אייקון במסך הבית, פתיחה מהירה, והתראות כשעונים לך.</p>
+    <button class="btn hot" data-a="install">${ic('download')} התקנה</button><button class="btn ghost" data-a="installLater">לא עכשיו</button>`);
+    return;
+  }
+  if (forPush) enablePush();
+}
+function maybeInstallPrompt() {
+  if (isStandalone || inAppBrowser) return;
+  const last = +lsGet('ll_inst_no') || 0;
+  if (Date.now() - last < 7 * 864e5) return;
+  if (!(deferredInstall || isIOS)) return;
+  setTimeout(() => { if (!sheetOpen() && !$('#overlay.open') && !['chat', 'add'].includes(curRoute()[0])) { lsSet('ll_inst_no', String(Date.now())); installSheet(false); } }, 8000);
+}
+window.addEventListener('appinstalled', () => { toast('🌿 LeafLoop הותקנה!'); });
+
 // =====================================================
 // ניווט
 // =====================================================
@@ -561,6 +631,8 @@ async function startSession() {
   try { await loadPool(true); } catch (e) { errLog(e); toast('לא הצלחנו לטעון צמחים. בדקו את החיבור לאינטרנט.'); }
   await Promise.race([S.matchesReady, new Promise(r => setTimeout(r, 4000))]);
   S.booted = true; markBooted();
+  if (pushOn()) enablePush(true); // רענון המכשיר הרשום
+  maybeInstallPrompt();
   updateDoc(doc(db, 'users', uid()), { lastSeen: Date.now() }).catch(errLog);
 }
 async function loadPool(force) {
@@ -975,11 +1047,12 @@ async function sendRequest(el) {
   const mEl = $('#req-msg'); const msg = mEl ? mEl.value.trim() : '';
   busy(el, true, 'שולחים…');
   try {
-    await addDoc(collection(db, 'requests'), {
+    const rref = await addDoc(collection(db, 'requests'), {
       from: uid(), to: p.ownerId, fromInfo: pubInfo(S.profile), toInfo: pubInfo(u),
       target: p.id, targetSnap: { catId: p.catId, thumb: p.thumb || null, offer: p.offer, qty: p.qty || 1, price: p.price || null },
       offer: ids, offerSnap: snap, kind, msg, status: 'pending', seen: false, t: Date.now()
     });
+    pushNotify('request', rref.id); askPushSoon();
     closeSheet(); toast(kind === 'buy' ? `ההודעה נשלחה ל${u.name} 🏷️ נעדכן אתכם כשתגיע תשובה.` : kind === 'swap' ? `ההצעה נשלחה ל${u.name}. נעדכן אתכם כשתגיע תשובה.` : kind === 'ask' ? `ההתעניינות נשלחה ל${u.name} 💚 נעדכן אתכם כשתגיע תשובה.` : `הבקשה נשלחה ל${u.name} 🎁 נעדכן אתכם כשתגיע תשובה.`);
   } catch (e) { errLog(e); busy(el, false); $('#req-err').textContent = 'השליחה לא הצליחה. נסו שוב.'; }
 }
@@ -996,8 +1069,9 @@ async function acceptReq(rid, toChat, el) {
     // קודם מאשרים את הפנייה, ורק אז נוצרת ההתאמה (כללי האבטחה בודקים את הסדר הזה)
     await updateDoc(doc(db, 'requests', rid), { status: 'accepted' });
     const theirPlants = r.offer.map(id => ({ id, ...(r.offerSnap[id] || {}) }));
-    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', reqId: rid, kind: r.kind || (r.offer.length ? 'swap' : 'gift'), status: toChat || r.kind === 'ask' || r.kind === 'buy' ? 'discussing' : 'agreed' });
+    const m = await createMatch({ other: u, mineIds: [r.target], theirIds: r.offer, theirPlants, type: 'request', reqId: rid, kind: r.kind || (r.offer.length ? 'swap' : 'gift'), status: 'discussing' });
     updateDoc(doc(db, 'requests', rid), { matchId: m.id }).catch(errLog);
+    pushNotify('accepted', rid);
     if (r.msg) addDoc(collection(db, 'matches', m.id, 'messages'), { from: uid(), sys: true, text: `💬 ${r.fromInfo.name} כתב/ה: ${String(r.msg).slice(0, 300)}`, t: Date.now() + 1 }).catch(errLog);
     if (toChat) go('chat/' + m.id); else showMatch(m);
   } catch (e) { errLog(e); busy(el, false); toast('לא הצלחנו לאשר. נסו שוב.'); }
@@ -1023,6 +1097,7 @@ async function createMatch(o) {
   };
   await setDoc(ref, data);
   await addDoc(collection(db, 'matches', id, 'messages'), { from: me, sys: true, text: '🌿 יש התאמה! מומלץ לתאם מפגש במקום ציבורי.', t: now });
+  pushNotify('match', id);
   return { id, ...data };
 }
 const snapOf = (m, pid) => ({ id: pid, ...((m.plants || {})[pid] || {}) });
@@ -1137,56 +1212,78 @@ function initMap(near, tries = 0) {
 // הוספת צמח
 // =====================================================
 let draft = null;
-const newDraft = () => ({ step: 'photo', img: null, catId: null, guesses: [], mode: 'swap', price: '', offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup', open: true, wants: [] });
+const newDraft = () => ({ step: 'name', img: null, catId: null, guesses: [], mode: 'swap', price: '', offer: 'cutting', condition: 'young', qty: 1, delivery: 'pickup', open: true, wants: [] });
+// הוספת צמח בשלבים: שם, תמונה, מה לעשות, פרטים, ומה רוצים בתמורה
+const ADD_STEPS = d => ['name', 'photo', 'mode', 'details', ...(['swap', 'both'].includes(d.mode) ? ['wants'] : [])];
 VIEWS.add = function () {
   if (!draft) draft = newDraft();
   const d = draft;
-  let html = `<div class="ph"><h1>הוספת צמח</h1></div><div class="pad" style="padding-top:4px">`;
-  if (d.step === 'photo') {
-    html += `<label class="drop" for="cam"><div class="big">${ic('camera', 44)}</div><h2>צלמו את הצמח</h2><span>תמונה טובה מביאה יותר התאמות</span></label>
-    <input type="file" id="cam" accept="image/*" capture="environment" class="sr" data-change="photo">
-    <label class="btn ghost" for="gal" style="margin-top:12px">${ic('image')} בחירה מהגלריה</label>
-    <input type="file" id="gal" accept="image/*" class="sr" data-change="photo">
-    <button class="btn ghost" data-a="skipPhoto">בלי תמונה, בחירה מהרשימה</button>`;
-  } else {
-    const c = d.catId ? catById(d.catId) : null;
-    html += safeImg(d.img) ? `<div class="scan" style="height:240px"><img src="${safeImg(d.img)}" alt=""התמונה שלך"><label class="lbl" for="gal2" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div><input type="file" id="gal2" accept="image/*" class="sr" data-change="photo">` : '';
-    html += `<p class="label">איזה צמח זה?</p>
-    <input class="field" id="plant-name" data-suggest="name" placeholder="כתבו את השם, למשל: מונסטרה מונקי" value="${esc(c ? c.he : '')}" data-change="plantName" autocomplete="off" enterkeyhint="done">
+  const steps = ADD_STEPS(d);
+  if (!steps.includes(d.step)) d.step = 'name';
+  const i = steps.indexOf(d.step), last = i === steps.length - 1;
+  const c = d.catId ? catById(d.catId) : null;
+  const sel = (k, obj) => `<div class="chips" style="gap:8px">${Object.entries(obj).map(([kk, v]) => `<button class="sel ${d[k] === kk ? 'on' : ''}" data-a="draftSet" data-k="${k}" data-v="${kk}">${v}</button>`).join('')}</div>`;
+  let body = '';
+  if (d.step === 'name') {
+    body = `<h2 class="wiz-q">איזה צמח זה?</h2><p class="muted">כתבו את השם. ההצעות שמופיעות הן רק לעזרה.</p>
+    <input class="field wiz-big" id="plant-name" data-suggest="name" placeholder="למשל: מונסטרה" value="${esc(c ? c.he : '')}" data-change="plantName" autocomplete="off" enterkeyhint="next">
     <div class="sugg" id="plant-name-sugg"></div>
-    ${c && c.sci ? `<p class="sci" style="margin-top:6px">${esc(c.sci)}</p>` : `<p class="small muted" style="margin-top:6px">אפשר לכתוב כל שם. ההצעות הן רק לעזרה.</p>`}
-    <div class="err" id="add-err"></div>
-    <p class="label">מה תרצו לעשות איתו?</p>
+    ${c && c.sci ? `<p class="sci" style="margin-top:6px">${esc(c.sci)}</p>` : ''}<div class="err" id="add-err"></div>`;
+  } else if (d.step === 'photo') {
+    body = safeImg(d.img)
+      ? `<h2 class="wiz-q">איזה יופי! 📸</h2><div class="scan" style="height:min(38dvh,300px)"><img src="${safeImg(d.img)}" alt="התמונה שלך"><label class="lbl" for="gal2" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div><input type="file" id="gal2" accept="image/*" class="sr" data-change="photo">`
+      : `<h2 class="wiz-q">תמונה של ה${esc(c ? c.he : 'צמח')}</h2><p class="muted">מודעות עם תמונה מקבלות הרבה יותר פניות 🌿</p>
+    <label class="drop" for="cam" style="height:220px"><div class="big">${ic('camera', 44)}</div><h2>צילום עכשיו</h2></label><input type="file" id="cam" accept="image/*" capture="environment" class="sr" data-change="photo">
+    <label class="btn ghost" for="gal" style="margin-top:12px">${ic('image')} בחירה מהגלריה</label><input type="file" id="gal" accept="image/*" class="sr" data-change="photo">
+    <button class="link-btn" data-a="skipPhoto">אין לי תמונה כרגע, להמשיך בלי</button>`;
+  } else if (d.step === 'mode') {
+    body = `<h2 class="wiz-q">מה תרצו לעשות איתו?</h2>
     <div class="modes">${Object.entries(MODE).map(([k, m]) => `<button class="mode-opt ${m.c} ${d.mode === k ? 'on' : ''}" data-a="draftSet" data-k="mode" data-v="${k}"><i>${m.i}</i><b>${MODE_ACT[k]}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
     ${d.mode === 'sale' ? `<p class="label">מחיר</p><div class="price-in"><input class="field" id="price" type="number" inputmode="numeric" min="1" max="99999" placeholder="למשל 40" value="${esc(d.price)}"><span>₪</span></div>` : ''}
-    <p class="label">מה אתם מציעים?</p><div class="chips" style="gap:8px">${Object.entries(OFFER).map(([k, v]) => `<button class="sel ${d.offer === k ? 'on' : ''}" data-a="draftSet" data-k="offer" data-v="${k}">${v}</button>`).join('')}</div>
-    <p class="label">מצב הצמח</p><div class="chips" style="gap:8px">${Object.entries(COND).map(([k, v]) => `<button class="sel ${d.condition === k ? 'on' : ''}" data-a="draftSet" data-k="condition" data-v="${k}">${v}</button>`).join('')}</div>
+    <div class="err" id="add-err"></div>`;
+  } else if (d.step === 'details') {
+    body = `<h2 class="wiz-q">עוד כמה פרטים</h2>
+    <p class="label">מה אתם מציעים?</p>${sel('offer', OFFER)}
+    <p class="label">מצב הצמח</p>${sel('condition', COND)}
     <p class="label">כמות</p><div class="stepper"><button data-a="qty" data-v="1" aria-label="יותר">+</button><b id="qty">${d.qty}</b><button data-a="qty" data-v="-1" aria-label="פחות">−</button></div>
-    <p class="label">מסירה</p><div class="chips" style="gap:8px">${Object.entries(DELIV).map(([k, v]) => `<button class="sel ${d.delivery === k ? 'on' : ''}" data-a="draftSet" data-k="delivery" data-v="${k}">${v}</button>`).join('')}</div>
-    ${['gift', 'sale'].includes(d.mode) ? '<input type="checkbox" id="open" checked hidden>' : `<label class="toggle"><span><b>💚 פתוח/ה להצעות</b><br><span class="small muted">אפשר לקבל הצעות גם על צמחים שלא ברשימת המשאלות שלכם.</span></span><input type="checkbox" id="open" ${d.open ? 'checked' : ''} data-change="open"></label>`}
-    <div ${['gift', 'sale'].includes(d.mode) ? 'hidden' : ''}>
-    <p class="label">מה הייתם רוצים לקבל בתמורה?</p>
+    <p class="label">מסירה</p>${sel('delivery', DELIV)}`;
+  } else {
+    body = `<h2 class="wiz-q">מה הייתם רוצים בתמורה?</h2><p class="muted">לא חובה. זה עוזר למצוא התאמות.</p>
     <div class="row"><input class="field" id="want-in" data-suggest="want" placeholder="למשל: פילודנדרון" autocomplete="off" enterkeyhint="done"><button class="btn sun sm" data-a="addWant">הוספה</button></div>
-    <div class="sugg" id="want-in-sugg"></div>
-    <div class="err" id="want-err"></div>
-    <div class="chips">${d.wants.map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWant" data-id="${esc(w)}" aria-label="הסרה">×</button></span>`).join('')}</div>
-    <p class="small muted" style="margin-top:6px">הצמחים האלה יתווספו לרשימת המשאלות שלכם.</p>
-    </div>
-    <div style="margin-top:22px"><button class="btn hot" data-a="savePlant">${ic('check')} פרסום הצמח</button><button class="btn ghost" data-a="cancelAdd">ביטול</button></div>`;
+    <div class="sugg" id="want-in-sugg"></div><div class="err" id="want-err"></div>
+    <div class="chips" style="margin-top:8px">${d.wants.map(w => `<span class="chip want">${esc(catById(w).he)} <button data-a="rmWant" data-id="${esc(w)}" aria-label="הסרה">×</button></span>`).join('')}</div>
+    <label class="toggle"><span><b>💚 פתוח/ה להצעות</b><br><span class="small muted">אפשר לקבל הצעות גם על צמחים אחרים.</span></span><input type="checkbox" id="open" ${d.open ? 'checked' : ''} data-change="open"></label>`;
   }
-  $('#view').innerHTML = html + '</div>';
+  const showNext = d.step !== 'photo' || safeImg(d.img);
+  $('#view').innerHTML = `<div class="ph wiz-h">${i > 0 ? `<button class="icon-btn" data-a="addBack" aria-label="חזרה">${ic('back')}</button>` : ''}<h1>הוספת צמח</h1><span class="wiz-n">${i + 1}/${steps.length}</span></div>
+  <div class="wiz-bar" role="progressbar" aria-valuenow="${i + 1}" aria-valuemax="${steps.length}"><i style="width:${Math.round((i + 1) / steps.length * 100)}%"></i></div>
+  ${c && d.step !== 'name' ? `<div class="wiz-sum"><span class="thumb">${safeImg(d.img) ? `<div class="photo"><img src="${safeImg(d.img)}" alt=""></div>` : visual({ id: 'draft', catId: d.catId })}</span><b>${esc(c.he)}</b>${['details', 'wants'].includes(d.step) ? `<span class="chip">${MODE[d.mode].i} ${d.mode === 'sale' && d.price ? '₪' + esc(d.price) : MODE[d.mode].t}</span>` : ''}</div>` : ''}
+  <div class="pad wiz-body">${body}</div>
+  <div class="wiz-foot">${showNext ? `<button class="btn hot" data-a="${last ? 'savePlant' : 'addNext'}">${last ? ic('check') + ' פרסום הצמח' : 'המשך'}</button>` : ''}<button class="btn ghost" data-a="cancelAdd">ביטול</button></div>`;
+  if (d.step === 'name') setTimeout(() => { const n = $('#plant-name'); if (n && !n.value) n.focus(); }, 50);
 };
+function addGo(dir) {
+  keepName();
+  const steps = ADD_STEPS(draft), i = steps.indexOf(draft.step);
+  if (dir > 0) {
+    if (draft.step === 'name' && !draft.catId) { $('#add-err').textContent = 'כתבו את שם הצמח.'; $('#plant-name').focus(); return; }
+    if (draft.step === 'mode' && draft.mode === 'sale' && !(Math.round(+draft.price || 0) > 0)) { $('#add-err').textContent = 'כתבו מחיר למכירה.'; const pe = $('#price'); if (pe) pe.focus(); return; }
+  }
+  const ns = ADD_STEPS(draft);
+  draft.step = ns[Math.max(0, Math.min(ns.length - 1, ns.indexOf(draft.step) + dir))] || steps[i];
+  VIEWS.add(); window.scrollTo(0, 0);
+}
 function keepName() {
-  const inp = $('#plant-name'); if (!inp || !draft) return;
-  const c = toCat(inp.value); draft.catId = c ? c.id : null;
+  if (!draft) return;
+  const inp = $('#plant-name'); if (inp) { const c = toCat(inp.value); draft.catId = c ? c.id : null; }
   const o = $('#open'); if (o) draft.open = o.checked;
   const pr = $('#price'); if (pr) draft.price = pr.value;
 }
 async function savePlant(el) {
   keepName();
-  if (!draft.catId) { $('#add-err').textContent = 'כתבו את שם הצמח.'; $('#plant-name').focus(); return; }
+  if (!draft.catId) { draft.step = 'name'; VIEWS.add(); $('#add-err').textContent = 'כתבו את שם הצמח.'; return; }
   const price = Math.round(+draft.price || 0);
-  if (draft.mode === 'sale' && price < 1) { $('#add-err').textContent = 'כתבו מחיר למכירה.'; const pe = $('#price'); if (pe) pe.focus(); return; }
+  if (draft.mode === 'sale' && price < 1) { draft.step = 'mode'; VIEWS.add(); $('#add-err').textContent = 'כתבו מחיר למכירה.'; return; }
   busy(el, true, 'מפרסמים…');
   try {
     const ref = doc(collection(db, 'plants'));
@@ -1195,7 +1292,7 @@ async function savePlant(el) {
     const data = {
       ownerId: uid(), ownerName: pr.name, ownerColor: pr.color || '#19A55B', ownerPhoto: pr.photo || null, city: pr.city, lat: pr.lat, lng: pr.lng,
       catId: draft.catId, mode: draft.mode, price: draft.mode === 'sale' ? price : null, frozen: false, offer: draft.offer, condition: draft.condition, qty: draft.qty, delivery: draft.delivery,
-      open: $('#open').checked, available: true, hasPhoto: !!draft.img, thumb, t: Date.now()
+      open: ['gift', 'sale'].includes(draft.mode) ? true : !!draft.open, available: true, hasPhoto: !!draft.img, thumb, t: Date.now()
     };
     const b = writeBatch(db);
     b.set(ref, data);
@@ -1210,7 +1307,7 @@ async function savePlant(el) {
     draft = null;
     go('discover');
     setTimeout(() => toast(seekers ? `פורסם! ${seekers === 1 ? 'משתמש אחד מחפש' : seekers + ' משתמשים מחפשים'} ${name} 🔥` : `פורסם! ה${name} שלך מחכה להתאמה.`), 300);
-  } catch (e) { errLog(e); busy(el, false); $('#add-err').textContent = 'הפרסום לא הצליח. בדקו את החיבור ונסו שוב.'; }
+  } catch (e) { errLog(e); busy(el, false); toast('הפרסום לא הצליח. בדקו את החיבור ונסו שוב.'); }
 }
 
 // =====================================================
@@ -1317,6 +1414,8 @@ async function sendMsg(mid, text, img, sys) {
   try {
     await addDoc(collection(db, 'matches', mid, 'messages'), { from: me, text: text || '', img: img || null, sys: !!sys, t: now });
     await updateDoc(doc(db, 'matches', mid), { lastMsg: img ? '📷 תמונה' : text, lastAt: now, lastFrom: me, [`unread.${o}`]: increment(1) });
+    pushNotify('msg', mid, img ? '📷 תמונה' : text);
+    if (!sys) askPushSoon();
   } catch (e) { errLog(e); toast('ההודעה לא נשלחה. בדקו את החיבור.'); }
 }
 function fmtWhen(v) { try { return new Date(v).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch (e) { return v; } }
@@ -1402,6 +1501,9 @@ function settingsSheet() {
   <p class="label">רדיוס חיפוש</p><div class="chips" style="gap:8px">${RADII.map(r => `<button class="sel ${r === u.radius ? 'on' : ''}" data-a="setRadius" data-r="${r}">${radiusLabel(r)}</button>`).join('')}</div>
   <div class="err" id="set-err"></div>
   <button class="btn primary" data-a="saveSettings" style="margin-top:14px">שמירה</button>
+  <p class="label">התראות</p>
+  ${pushOn() ? `<div class="rate-row"><b>🔔 ההתראות פעילות</b><span class="small muted">במכשיר הזה</span></div>`
+    : `<button class="btn sun" data-a="pushOn">🔔 הפעלת התראות</button>${iosNeedsInstall() ? '<p class="small muted">באייפון צריך קודם להוסיף את האפליקציה למסך הבית.</p>' : ''}`}
   ${deferredInstall ? `<button class="btn sun" data-a="install">${ic('download')} התקנת האפליקציה בטלפון</button>` : ''}
   ${isIOS && !isStandalone ? `<div class="note" style="margin-top:14px">${ic('download', 20)}<span><b>להתקנה באייפון:</b> בספארי לוחצים על סמל השיתוף ואז "הוספה למסך הבית".</span></div>` : ''}
   ${(S.priv.blocked || []).length ? `<p class="label">משתמשים חסומים</p>${S.priv.blocked.map(id => { const m = S.matches.find(x => x.users.includes(id)); const nm = (m && m.info && m.info[id] && m.info[id].name) || (S.users[id] && S.users[id].name) || 'משתמש/ת'; return `<div class="rate-row"><b>${esc(nm)}</b><button class="btn ghost sm" data-a="unblock" data-id="${esc(id)}">ביטול חסימה</button></div>`; }).join('')}` : ''}
@@ -1804,6 +1906,7 @@ async function startCall(mid) {
     const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
     await setDoc(ref, { matchId: mid, from: uid(), to: CALL.other.id, fromInfo: pubInfo(S.profile), status: 'ringing', offer: { type: offer.type, sdp: offer.sdp }, answer: null, t: Date.now() });
     flushPending();
+    pushNotify('call', ref.id);
     setCallStatus('מצלצל…'); CALL.ringStop = tone(RINGBACK, 3500);
     CALL.unsubs.push(onSnapshot(ref, sn => {
       const d = sn.data(); if (!d || !CALL.pc) return;
@@ -1917,6 +2020,7 @@ async function sendVoice(mid, url, dur) {
   const me = uid(), o = otherId(m), now = Date.now();
   await addDoc(collection(db, 'matches', mid, 'messages'), { from: me, text: '', img: null, audio: url, dur, sys: false, t: now });
   await updateDoc(doc(db, 'matches', mid), { lastMsg: '🎙️ הודעה קולית', lastAt: now, lastFrom: me, [`unread.${o}`]: increment(1) });
+  pushNotify('msg', mid, '🎙️ הודעה קולית');
 }
 let player = null, playingId = null;
 function playVoice(id) {
@@ -2027,7 +2131,9 @@ const A = {
   matchChat: el => { $('#overlay').classList.remove('open'); go('chat/' + el.dataset.id); },
 
   // הוספה
-  skipPhoto: () => { draft.step = 'details'; VIEWS.add(); },
+  skipPhoto: () => { draft.step = 'mode'; VIEWS.add(); window.scrollTo(0, 0); },
+  addNext: () => addGo(1),
+  addBack: () => addGo(-1),
   draftSet: el => { keepName(); draft[el.dataset.k] = el.dataset.v; VIEWS.add(); },
   qty: el => { draft.qty = Math.max(1, Math.min(99, draft.qty + +el.dataset.v)); $('#qty').textContent = draft.qty; },
   addWant: () => {
@@ -2142,6 +2248,10 @@ const A = {
   recSend: () => stopRec(false),
   vplay: el => playVoice(el.dataset.id),
 
+  // התראות והתקנה
+  pushOn: () => { closeSheet(); enablePush(false); },
+  installLater: () => { lsSet('ll_inst_no', String(Date.now())); closeSheet(); },
+
   // מיקום
   useLive: el => { lsSet('ll_live', '1'); busy(el, true, ''); locate(true); setTimeout(() => busy(el, false), 4000); },
   noLive: () => { lsSet('ll_live_ask', '0'); const b = $('.live-ask'); if (b) b.remove(); },
@@ -2248,7 +2358,13 @@ const A = {
 
   // פרופיל
   settings: settingsSheet,
-  install: async () => { if (!deferredInstall) return; deferredInstall.prompt(); await deferredInstall.userChoice.catch(() => { }); deferredInstall = null; closeSheet(); },
+  install: async () => {
+    if (!deferredInstall) return;
+    deferredInstall.prompt();
+    const ch = await deferredInstall.userChoice.catch(() => ({}));
+    deferredInstall = null; closeSheet();
+    if (ch && ch.outcome === 'accepted' && pushCapable() && Notification.permission === 'default') setTimeout(() => enablePush(false), 1200);
+  },
   setRadius: el => { $$('#sheet [data-a=setRadius]').forEach(b => b.classList.toggle('on', b === el)); },
   saveSettings: async el => {
     const name = $('#set-name').value.trim();
@@ -2369,7 +2485,7 @@ document.addEventListener('change', async e => {
     try {
       keepName();
       draft.img = await compress(el.files[0], 760, .72);
-      draft.step = 'details'; VIEWS.add();
+      draft.step = 'photo'; VIEWS.add();
     } catch (err) { toast('לא הצלחנו לקרוא את התמונה. נסו תמונה אחרת.'); }
   }
   if (k === 'plantName') { const c = toCat(el.value); draft.catId = c ? c.id : null; const e2 = $('#add-err'); if (e2) e2.textContent = ''; }
@@ -2433,7 +2549,7 @@ document.addEventListener('keydown', e => {
     const box = $('#' + t.id + '-sugg'); if (box) box.innerHTML = '';
     if (t.dataset.suggest === 'want') A.addWant();
     else if (t.dataset.suggest === 'wish') A.addWish();
-    else { t.dispatchEvent(new Event('change', { bubbles: true })); t.blur(); }
+    else { t.dispatchEvent(new Event('change', { bubbles: true })); t.blur(); if (t.id === 'plant-name') addGo(1); }
   }
 });
 window.addEventListener('hashchange', route);

@@ -4,12 +4,15 @@
 const VER = '10.12.2';
 const NAMES = ['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js'];
 async function loadAll(base) { return Promise.all(NAMES.map(n => import(base + n))); }
-let mods;
-try { mods = await loadAll('/fb/'); }
+let mods, BASE = '/fb/';
+try { mods = await loadAll(BASE); }
 catch (e) {
   console.warn('[LeafLoop] /fb/ failed, trying gstatic', e);
-  mods = await loadAll(`https://www.gstatic.com/firebasejs/${VER}/`);
+  BASE = `https://www.gstatic.com/firebasejs/${VER}/`;
+  mods = await loadAll(BASE);
 }
+// התראות פוש נטענות רק כשצריך
+export const loadMessaging = () => import(BASE + 'firebase-messaging.js');
 const [A, U, F] = mods;
 export const { initializeApp } = A;
 export const {
