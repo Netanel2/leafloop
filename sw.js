@@ -1,6 +1,6 @@
 // Service worker: מאפשר התקנה כאפליקציה ופתיחה מהירה.
 // בכל עדכון גדול אפשר להעלות את המספר כדי לרענן את הקבצים השמורים.
-const V = 'leafloop-v27';
+const V = 'leafloop-v28';
 // הכתובת הראשית של האפליקציה. כל לחיצה על התראה פותחת אותה.
 const APP_URL = 'https://leafloop-nine.vercel.app/';
 const SHELL = ['./', 'index.html', 'boot.js', 'style.css', 'app.js', 'art.js', 'data.js', 'fb.js', 'firebase-config.js', 'icon.svg', 'icon-192.png', 'manifest.webmanifest'];

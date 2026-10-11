@@ -415,7 +415,7 @@ async function enablePush(silent) {
     const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('service worker not ready'), { code: 'sw-timeout' })), 12000))]);
     const token = await M.getToken(M.getMessaging(pushApp || fbApp), { vapidKey: CFG.VAPID_KEY, serviceWorkerRegistration: reg });
     if (!token) throw Object.assign(new Error('no token returned'), { code: 'no-token' });
-    await setDoc(doc(db, 'users', uid(), 'private', 'push'), { tokens: arrayUnion(token), t: Date.now() }, { merge: true });
+    await setDoc(doc(db, 'users', uid(), 'private', 'push'), { tokens: arrayUnion(token), origins: { [token]: location.origin }, t: Date.now() }, { merge: true });
     lsSet('ll_push', '1'); lsSet('ll_push_off', '0'); lsSet('ll_push_token', token);
     if (!silent) {
       sheet(`<div class="ask-ic">✅</div><h3>ההתראות פעילות</h3><p class="muted">מעכשיו נודיע לך בטלפון כשמישהו עונה, פונה או מתקשר, גם כשהאפליקציה סגורה.</p><button class="btn hot" data-a="closeSheet">מעולה</button>`);
@@ -1293,10 +1293,10 @@ VIEWS.add = function () {
   } else if (d.step === 'photo') {
     body = safeImg(d.img)
       ? `<h2 class="wiz-q">איזה יופי! 📸</h2><div class="scan" style="height:min(38dvh,300px)"><img src="${safeImg(d.img)}" alt="התמונה שלך"><label class="lbl" for="gal2" style="cursor:pointer">${icInline('image', 14)} החלפת תמונה</label></div><input type="file" id="gal2" accept="image/*" class="sr" data-change="photo">`
-      : `<h2 class="wiz-q">תמונה של ה${esc(c ? c.he : 'צמח')}</h2><p class="muted">מודעות עם תמונה מקבלות הרבה יותר פניות 🌿</p>
+      : `<h2 class="wiz-q">תמונה של ה${esc(c ? c.he : 'צמח')}</h2><p class="muted">צריך תמונה כדי לפרסם. אנשים רוצים לראות את הצמח לפני שהם פונים 🌿</p>
     <label class="drop" for="cam" style="height:220px"><div class="big">${ic('camera', 44)}</div><h2>צילום עכשיו</h2></label><input type="file" id="cam" accept="image/*" capture="environment" class="sr" data-change="photo">
     <label class="btn ghost" for="gal" style="margin-top:12px">${ic('image')} בחירה מהגלריה</label><input type="file" id="gal" accept="image/*" class="sr" data-change="photo">
-    <button class="link-btn" data-a="skipPhoto">אין לי תמונה כרגע, להמשיך בלי</button>`;
+    <div class="err" id="add-err"></div>`;
   } else if (d.step === 'mode') {
     body = `<h2 class="wiz-q">מה תרצו לעשות איתו?</h2>
     <div class="modes">${Object.entries(MODE).map(([k, m]) => `<button class="mode-opt ${m.c} ${d.mode === k ? 'on' : ''}" data-a="draftSet" data-k="mode" data-v="${k}"><i>${m.i}</i><b>${MODE_ACT[k]}</b><span>${MODE_HINT[k]}</span></button>`).join('')}</div>
@@ -1343,6 +1343,7 @@ function keepName() {
 async function savePlant(el) {
   keepName();
   if (!draft.catId) { draft.step = 'name'; VIEWS.add(); $('#add-err').textContent = 'כתבו את שם הצמח.'; return; }
+  if (!safeImg(draft.img)) { draft.step = 'photo'; VIEWS.add(); $('#add-err').textContent = 'צריך להוסיף תמונה של הצמח.'; return; }
   const price = Math.round(+draft.price || 0);
   if (draft.mode === 'sale' && price < 1) { draft.step = 'mode'; VIEWS.add(); $('#add-err').textContent = 'כתבו מחיר למכירה.'; return; }
   busy(el, true, 'מפרסמים…');
@@ -2287,7 +2288,7 @@ const A = {
   matchChat: el => { $('#overlay').classList.remove('open'); go('chat/' + el.dataset.id); },
 
   // הוספה
-  skipPhoto: () => { draft.step = 'mode'; VIEWS.add(); window.scrollTo(0, 0); },
+  skipPhoto: () => { },
   addNext: () => addGo(1),
   addBack: () => addGo(-1),
   draftSet: el => { keepName(); draft[el.dataset.k] = el.dataset.v; VIEWS.add(); },

@@ -2,7 +2,7 @@
 // 1. מעביר את דפי ההתחברות של Google/Firebase דרך הכתובת של האתר (בשביל אייפון).
 // 2. נותן לאפליקציה פרטי "ממסר" (TURN) לשיחות קוליות, כדי שיתחברו גם בסלולר.
 const FIREBASE_HOST = 'leafloop-f882c.firebaseapp.com';
-const WORKER_VERSION = '29';
+const WORKER_VERSION = '30';
 const CANONICAL = 'https://leafloop-nine.vercel.app';
 const PROJECT_ID = 'leafloop-f882c';
 
@@ -111,6 +111,13 @@ function fv(v) {
   return null;
 }
 function fmap(f) { const o = {}; for (const k in f) o[k] = fv(f[k]); return o; }
+// אם למשתמש יש מכשיר שנרשם בכתובת הראשית, שולחים רק אליו (בלי כפילויות ובלי הכתובת הישנה)
+function pickTokens(p) {
+  const toks = p && Array.isArray(p.tokens) ? p.tokens : [];
+  const org = (p && p.origins) || {};
+  const main = toks.filter(t => org[t] === CANONICAL);
+  return main.length ? main : toks;
+}
 const FS = path => `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
 async function fsGet(env, path) {
   const r = await fetch(FS(path), { headers: { Authorization: 'Bearer ' + await googleToken(env) } });
@@ -120,7 +127,7 @@ async function fsGet(env, path) {
 }
 async function pushTo(env, to, msg) {
   const p = await fsGet(env, `users/${to}/private/push`);
-  const tokens = (p && Array.isArray(p.tokens) ? p.tokens : []).slice(-5);
+  const tokens = pickTokens(p).slice(-5);
   if (!tokens.length) return 0;
   const gt = await googleToken(env), dead = [];
   let sent = 0;
@@ -178,7 +185,7 @@ async function broadcastBatch(env, uids, msg) {
   if (!r.ok) return { sent: 0, devices: 0, err: 'firestore ' + r.status + ': ' + (await r.text()).slice(0, 200) };
   const rows = await r.json();
   const tokens = [];
-  (Array.isArray(rows) ? rows : []).forEach(x => { if (x.found) { const t = fmap(x.found.fields || {}).tokens; if (Array.isArray(t)) tokens.push(...t.slice(-2)); } });
+  (Array.isArray(rows) ? rows : []).forEach(x => { if (x.found) tokens.push(...pickTokens(fmap(x.found.fields || {})).slice(-2)); });
   let sent = 0, err = '';
   await Promise.all(tokens.map(async token => {
     const s = await fetch(`https://fcm.googleapis.com/v1/projects/${PROJECT_ID}/messages:send`, {
